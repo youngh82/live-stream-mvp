@@ -56,3 +56,9 @@ certs/
 .demo-broadcast.pids
 .demo-logs/
 
+
+# 내부 작업 문서 (한국어). 저장소에는 영문 docs/ENGINEERING-LOG.md 를 둔다.
+# 이 셋은 진행 상황·설계 근거·이슈의 단일 출처라 로컬에는 반드시 유지할 것.
+docs/PROGRESS.md
+docs/ISSUES.md
+docs/PLAN-SOCIAL.md

@@ -355,9 +355,12 @@ pnpm verify:payout     # 46 checks — fee invariants, JWE round trip, DB payout
 
 ## Repository notes
 
-Design rationale lives in [`docs/PROGRESS.md`](docs/PROGRESS.md) — what was decided and why, not
-what the files contain. Failures worth not repeating are in
-[`docs/ISSUES.md`](docs/ISSUES.md), including the ones still open.
+[`docs/ENGINEERING-LOG.md`](docs/ENGINEERING-LOG.md) is the log of what actually went wrong here
+and what turned out to be causing it — only entries with a confirmed cause, including the ones
+still open. A camera that answered "done" while returning the opposite orientation, an
+`IntersectionObserver` that fires again on re-observe, a tip button that rendered perfectly and
+could not be clicked.
 
 Comments in the code explain **why**, not what. Where a decision is easy to accidentally revert,
-the comment says so.
+the comment says so — several of these were found twice because the second reader didn't know
+why the first fix looked odd.
