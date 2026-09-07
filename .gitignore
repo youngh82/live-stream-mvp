@@ -32,6 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# 값이 비어 있는 템플릿은 저장소에 있어야 한다
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +41,18 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# TLS 개발용 인증서/개인키 (M-05)
+auto.crt
+auto.key
+*.key
+*.crt
+
+# mkcert 개발 인증서
+certs/
+
+# 데모 스크린샷용 스트림 키 (scripts/seed-demo.ts)
+.demo-streams
+.demo-broadcast.pids
+.demo-logs/
+

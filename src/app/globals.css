@@ -24,3 +24,21 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/*
+ * 세로 영상 표시 규칙.
+ *
+ * 소스는 항상 9:16이다. 폰 화면은 그보다 조금 더 길쭉하므로(9:19.5 등)
+ * cover로 채워야 여백 없이 몰입감이 나온다 — 잘리는 양은 10% 남짓이다.
+ * 반면 가로가 넓은 화면(데스크톱)에서 cover를 쓰면 위아래가 크게 잘리므로
+ * 그때는 contain으로 전체를 보여준다.
+ */
+.video-fill {
+  object-fit: cover;
+}
+
+@media (min-aspect-ratio: 1 / 1) {
+  .video-fill {
+    object-fit: contain;
+  }
+}
