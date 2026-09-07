@@ -52,41 +52,10 @@ Everything in this repo is judged against these. If a feature doesn't serve one 
 The app server and the media server are separate from day one, and the app server is stateless —
 all shared state lives in Redis or Postgres.
 
-```mermaid
-flowchart LR
-  subgraph Broadcaster
-    OBS[OBS / RTMP]
-    PHONE[Phone browser<br/>WHIP]
-  end
-
-  subgraph Media["Media server — MediaMTX"]
-    MTX[(RTMP in<br/>WebRTC out)]
-  end
-
-  subgraph App["App — Next.js"]
-    API[API routes]
-    WEB[React client]
-  end
-
-  CHAT[Chat server<br/>Socket.io]
-  REDIS[(Redis<br/>pub/sub + state)]
-  DB[(Postgres<br/>Supabase)]
-  S3[(Supabase Storage<br/>thumbnails)]
-  THUMB[Thumbnail worker<br/>ffmpeg]
-
-  OBS -->|RTMP| MTX
-  PHONE -->|WHIP| MTX
-  MTX -->|auth per publish| API
-  MTX -->|on-publish / on-unpublish| API
-  MTX -->|WHEP| WEB
-  API --> DB
-  API --> REDIS
-  REDIS <--> CHAT
-  WEB <-->|WebSocket| CHAT
-  THUMB -->|HLS frame| MTX
-  THUMB --> S3
-  API -.reads live set.-> REDIS
-```
+<p align="center">
+  <img src="docs/images/architecture.webp" width="900"
+       alt="Broadcasters publish over RTMP or WHIP into MediaMTX, which authorises every publish against the app and serves viewers over WHEP. The app writes to Postgres and Redis; the chat server shares Redis pub/sub with it and talks to the client over WebSocket. A separate ffmpeg worker pulls frames from the HLS remux into Supabase Storage.">
+</p>
 
 **Why the pieces are split this way**
 
