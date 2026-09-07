@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>HLS Test</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body style="background:#000;margin:0;display:flex;align-items:center;justify-content:center;height:100vh">
+  <video id="video" controls autoplay muted style="max-width:100%;max-height:100vh"></video>
+  <script>
+    const url = 'http://localhost:8888/45d2c8f4-c546-447c-a8e5-1c9add76abf9/index.m3u8';
+    const video = document.getElementById('video');
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({ lowLatencyMode: true });
+      hls.loadSource(url);
+      hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('Manifest parsed, playing...');
+        video.play();
+      });
+      hls.on(Hls.Events.ERROR, (e, data) => {
+        console.error('HLS error:', data);
+        document.title = 'Error: ' + data.type + ' ' + data.details;
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = url;
+    }
+  </script>
+</body>
+</html>

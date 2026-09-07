@@ -1,0 +1,25 @@
+services:
+  mediamtx:
+    build:
+      context: .
+      dockerfile: Dockerfile.mediamtx
+    ports:
+      - "1935:1935"   # RTMP
+      - "8888:8888"   # HLS
+      - "8889:8889"   # WebRTC (WHIP/WHEP)
+      - "8189:8189/udp" # WebRTC ICE
+      - "9997:9997"   # API
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+    restart: always
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: always
+
+volumes:
+  redis-data:

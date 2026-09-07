@@ -1,0 +1,83 @@
+# MediaMTX Configuration for Live Stream MVP
+#
+# 보안 모델 (004 감사 이후):
+#   - 경로(path) 이름 = streams.id  → 공개해도 안전, WHEP URL에 그대로 노출됨
+#   - 송출(publish)   = /api/stream/auth 가 stream_key를 비밀번호로 검증
+#   - 재생(read)      = 공개
+#   - 관리 API        = 루프백 바인딩 + 인증 대상에서 제외
+
+logLevel: info
+logDestinations: [stdout]
+
+# API - 루프백에만 바인딩 (C-05: 외부 노출 금지)
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# RTMP
+rtmp: yes
+rtmpAddress: :1935
+
+# HLS (Low-Latency) - WebRTC 실패 시 폴백용
+hls: yes
+hlsAddress: :8890
+hlsAlwaysRemux: true
+hlsSegmentCount: 7
+hlsSegmentDuration: 500ms
+hlsPartDuration: 100ms
+hlsSegmentMaxSize: 50M
+hlsAllowOrigins: ['*']
+hlsVariant: lowLatency
+
+# Disable unused
+rtsp: no
+srt: no
+
+# WebRTC (WHIP/WHEP)
+#
+# TLS를 켜는 이유: 모바일 웹 방송(WHIP) 때문.
+#   - getUserMedia(카메라)는 secure context에서만 동작하므로 앱이 HTTPS여야 하고,
+#   - HTTPS 페이지에서 http:// WHIP 엔드포인트로 POST하면 mixed content로 차단된다.
+# 인증서는 mkcert로 발급한 것을 앱·채팅 서버와 공유한다. (certs/README.md)
+webrtc: yes
+webrtcAddress: :8891
+webrtcEncryption: yes
+webrtcServerCert: certs/dev.crt
+webrtcServerKey: certs/dev.key
+webrtcICEServers2: []
+webrtcAdditionalHosts: [127.0.0.1]
+webrtcLocalUDPAddress: :8189
+
+# ============================================
+# 인증 - 앱 서버에 위임 (C-04)
+#
+# 이전: authMethod internal + user "any" / 빈 비밀번호로 publish 허용
+#       → 경로 이름만 알면 누구나 송출 가능했음
+# 지금: 모든 publish 요청이 아래 엔드포인트로 전달되고,
+#       stream_key가 비밀번호로 일치해야 통과
+# ============================================
+authMethod: http
+authHTTPAddress: https://localhost:3000/api/stream/auth
+
+# 관리 API/메트릭은 루프백 전용이므로 인증 대상에서 제외
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+pathDefaults:
+  # $MTX_PATH = streams.id
+  runOnOnline: >
+    curl -s -X POST https://localhost:3000/api/stream/on-publish
+    -H "Content-Type: application/json"
+    -d '{"path": "$MTX_PATH"}'
+    || true
+  runOnOnlineRestart: false
+
+  runOnOffline: >
+    curl -s -X POST https://localhost:3000/api/stream/on-unpublish
+    -H "Content-Type: application/json"
+    -d '{"path": "$MTX_PATH"}'
+    || true
+
+paths:
+  all_others:

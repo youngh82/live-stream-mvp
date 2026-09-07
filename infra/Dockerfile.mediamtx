@@ -1,0 +1,7 @@
+FROM alpine:latest AS tools
+RUN apk add --no-cache curl
+
+FROM bluenviron/mediamtx:latest
+COPY --from=tools /usr/bin/curl /usr/bin/curl
+COPY --from=tools /usr/lib/ /usr/lib/
+COPY --from=tools /lib/ /lib/
