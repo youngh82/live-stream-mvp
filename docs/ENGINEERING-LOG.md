@@ -88,6 +88,62 @@ blaming the network — the failure looks like an ICE problem and isn't one.
 
 ---
 
+### Playback worked everywhere except on mobile data
+
+**Symptom.** On a first real deployment, a test broadcast played fine on desktop
+and on the phone over Wi-Fi. On mobile data the page loaded, the player appeared,
+and the video stayed black. The server logged the session opening and then:
+
+```
+[WebRTC] [session 179eac95] created by 172.56.166.37:38530
+[WebRTC] [session 179eac95] closed: deadline exceeded while waiting connection
+```
+
+Signalling is HTTP over TCP, so it succeeded and the session was created. Only the
+media path failed, which makes this look like a dead server rather than a
+connectivity problem.
+
+**Cause.** Debug logging exposed the candidates the phone was offering, and there
+were two separate problems in them:
+
+```
+2607:fb91:21e7:fb9:...        the phone has an IPv6 address
+172.56.166.37 : 24917         and an IPv4 one
+172.56.166.37 : 1506          same interface, different port
+```
+
+The carrier network is IPv6; the server advertised IPv4 candidates only, so no
+pair could form on the address family the phone actually prefers. The IPv4 path
+was no better: the same interface reports a different external port on each STUN
+query, which is the definition of a symmetric NAT. A port learned from a STUN
+server is worthless for reaching anyone else.
+
+**Fix.** Give the server an IPv6 address and advertise it, rather than trying to
+punch through the NAT. Direct IPv6 has no NAT to defeat:
+
+```
+peer connection established,
+  local:  udp/2600:1f18:364:7e00:...:9edf/8189
+  remote: prflx/udp/2607:fb91:...:14d9/62255
+```
+
+Two details are load-bearing. The media server has to run on the **host network**,
+not with published ports: Docker's IPv6 port publishing goes through a userland
+proxy that rewrites the source address, and ICE matches candidate pairs by source
+address, so it breaks the connection it is meant to forward. And the ICE host list
+needs **both** families — dropping IPv6 silently returns to the original failure.
+
+**Lesson.** This is a vertical short-form live app; its audience watches on mobile
+data. Every test up to this point had run on localhost or Wi-Fi, and both make the
+problem invisible. Testing on the network the product is actually used on is not
+the last step of deployment — it is the one that finds the class of bug the earlier
+steps cannot.
+
+A TURN server, which the plan had budgeted days for, turned out not to be the
+primary answer. It remains as a fallback for viewers with no IPv6 at all.
+
+---
+
 ### Demo broadcasts failed with 401 and left no trace
 
 **Symptom.** Every ffmpeg publish died with `Server error: authentication

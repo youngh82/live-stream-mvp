@@ -36,7 +36,8 @@ services:
     environment:
       NODE_ENV: production
       REDIS_URL: redis://redis:6379
-      MEDIAMTX_API_URL: http://mediamtx:9997
+      # mediamtx는 호스트 네트워크라 서비스명으로 못 부른다 (위 networks 주석 참고)
+      MEDIAMTX_API_URL: http://172.28.0.1:9997
       # 시크릿은 이미지가 아니라 여기로만 들어온다 (--env-file)
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
@@ -83,7 +84,7 @@ services:
       NODE_ENV: production
       REDIS_URL: redis://redis:6379
       # 내부 네트워크로 읽는다. 공개 주소를 거칠 이유가 없다
-      MEDIA_HLS_INTERNAL_URL: http://mediamtx:8890
+      MEDIA_HLS_INTERNAL_URL: http://172.28.0.1:8890
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       THUMBNAIL_INTERVAL_MS: ${THUMBNAIL_INTERVAL_MS:-30000}
@@ -91,8 +92,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      mediamtx:
-        condition: service_started
     restart: always
     logging: *default-logging
 
@@ -116,19 +115,33 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mediamtx
-    ports:
-      - "1935:1935"       # RTMP (OBS 송출)
-      - "8889:8889"       # WHIP/WHEP
-      - "8890:8890"       # HLS
-      - "8189:8189/udp"   # WebRTC ICE — **UDP를 빠뜨리면 화면만 뜨고 영상이 안 나온다**
+    # ⚠️ **포트를 게시(-p)하지 않는다. 호스트 네트워크를 그대로 쓴다.**
+    # 도커의 포트 게시는 IPv6에서 유저랜드 프록시로 동작하면서 출발지 주소를
+    # 바꿔버린다. ICE는 출발지 주소로 후보 쌍을 맞추므로 그대로 깨진다.
+    # EC2에서 실측으로 확인했다 (ISSUES U-13).
+    # 부수 효과로 고대역폭 UDP가 프록시를 거치지 않아 오버헤드도 사라진다.
+    network_mode: host
     volumes:
       # 개발용 mediamtx.yml이 아니다 — 그건 mkcert 인증서를 읽어서 컨테이너에서 죽는다
       - ./mediamtx.prod.yml:/mediamtx.yml:ro
     environment:
-      # ⚠️ 배포 시 공개 IP 또는 도메인으로 채울 것. 비워두면 아무도 시청할 수 없다.
-      MTX_WEBRTCADDITIONALHOSTS: ${MEDIA_PUBLIC_HOST:-}
+      # ⚠️ **IPv4와 IPv6를 둘 다 넣는다** (쉼표 구분).
+      # IPv6를 빠뜨리면 모바일 데이터 시청자가 연결하지 못한다 — 통신사 망은
+      # IPv6이고, IPv4 쪽은 대칭형 NAT라 STUN만으로 못 뚫는다.
+      # **로컬이나 Wi-Fi 테스트로는 절대 드러나지 않는다.**
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIA_PUBLIC_HOSTS:-}
     restart: always
     logging: *default-logging
+
+# 게이트웨이 주소를 고정한다. mediamtx가 호스트 네트워크에 있어서 서비스명으로
+# 부를 수 없으므로, 앱·워커가 이 주소로 미디어 서버에 닿는다.
+# 관리 API(9997)도 이 주소에만 바인딩해 외부 노출을 막는다.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          gateway: 172.28.0.1
 
 volumes:
   redis-data:
