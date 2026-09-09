@@ -1,0 +1,134 @@
+# 프로덕션 스택 — EC2 한 대에 전부 올린다.
+#
+# **Vercel + EC2가 아니다.** 채팅 서버가 Socket.IO 롱커넥션을 붙들고 있어서
+# 요청 단위 서버리스에 올라가지 않는다. 앱·채팅·워커·Redis·미디어가 한 호스트에서
+# 돌고, 앞에 리버스 프록시(Nginx/Caddy)가 TLS를 종단한다.
+#
+# 실행:
+#   cd infra
+#   docker compose -f docker-compose.prod.yml --env-file ../.env.production up -d --build
+#
+# ⚠️ NEXT_PUBLIC_* 는 런타임이 아니라 **빌드 시점에 번들에 박힌다.**
+#    그래서 environment가 아니라 build.args로 넘긴다. 주소를 바꾸면
+#    반드시 --build 로 다시 빌드해야 한다. environment에만 넣으면
+#    배포된 앱이 localhost를 찌르면서 조용히 실패한다.
+
+x-logging: &default-logging
+  # docker logs는 그냥 두면 무한히 자라 디스크를 채운다. 서비스가 아니라
+  # 로그 때문에 서버가 죽는 일이 실제로 흔하다.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.app
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_HLS_BASE_URL: ${NEXT_PUBLIC_HLS_BASE_URL}
+        NEXT_PUBLIC_WHEP_BASE_URL: ${NEXT_PUBLIC_WHEP_BASE_URL}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      MEDIAMTX_API_URL: http://mediamtx:9997
+      # 시크릿은 이미지가 아니라 여기로만 들어온다 (--env-file)
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      TOSS_SECRET_KEY: ${TOSS_SECRET_KEY:-}
+      TOSS_PAYOUT_SECURITY_KEY: ${TOSS_PAYOUT_SECURITY_KEY:-}
+      APP_URL: ${APP_URL}
+    ports:
+      - "127.0.0.1:3000:3000"   # 리버스 프록시만 접근한다. 외부 직접 노출 금지
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
+    logging: *default-logging
+
+  chat:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.chat
+    environment:
+      NODE_ENV: production
+      CHAT_PORT: 3001
+      REDIS_URL: redis://redis:6379
+      CORS_ORIGIN: ${APP_URL}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # TLS는 리버스 프록시가 종단한다. 컨테이너 안은 평문이다
+      # (인증서 경로가 없으면 chat.ts가 알아서 평문으로 뜬다)
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
+    logging: *default-logging
+
+  thumbnailer:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.thumbnailer
+    environment:
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      # 내부 네트워크로 읽는다. 공개 주소를 거칠 이유가 없다
+      MEDIA_HLS_INTERNAL_URL: http://mediamtx:8890
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      THUMBNAIL_INTERVAL_MS: ${THUMBNAIL_INTERVAL_MS:-30000}
+      THUMBNAIL_CONCURRENCY: ${THUMBNAIL_CONCURRENCY:-3}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mediamtx:
+        condition: service_started
+    restart: always
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    # **AOF를 켠다.** 라이브 목록(live:streams)이 Redis에만 있어서, 껐다 켜면
+    # 방송 중인 스트림이 피드에서 전부 사라진다. AOF는 그 창을 좁힐 뿐이고
+    # 진짜 복구는 MediaMTX에 되묻는 재조정 코드다 — 아직 없다 (관문 2).
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: always
+    logging: *default-logging
+
+  mediamtx:
+    build:
+      context: .
+      dockerfile: Dockerfile.mediamtx
+    ports:
+      - "1935:1935"       # RTMP (OBS 송출)
+      - "8889:8889"       # WHIP/WHEP
+      - "8890:8890"       # HLS
+      - "8189:8189/udp"   # WebRTC ICE — **UDP를 빠뜨리면 화면만 뜨고 영상이 안 나온다**
+    volumes:
+      # 개발용 mediamtx.yml이 아니다 — 그건 mkcert 인증서를 읽어서 컨테이너에서 죽는다
+      - ./mediamtx.prod.yml:/mediamtx.yml:ro
+    environment:
+      # ⚠️ 배포 시 공개 IP 또는 도메인으로 채울 것. 비워두면 아무도 시청할 수 없다.
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIA_PUBLIC_HOST:-}
+    restart: always
+    logging: *default-logging
+
+volumes:
+  redis-data:

@@ -1,0 +1,42 @@
+# 썸네일 워커.
+#
+# 채팅 서버와 같은 구조인데 **ffmpeg가 필요하다** — 그래서 이미지를 나눈다.
+# ffmpeg를 앱 이미지에 넣으면 앱만 재배포할 때마다 그 무게를 같이 끌고 다닌다.
+#
+# HLS 리먹스에서 프레임을 떠 Supabase Storage에 올린다. MediaMTX에 스냅샷
+# API가 없어서 이 경로를 쓴다 (README의 아키텍처 설명 참고).
+#
+# syntax=docker/dockerfile:1
+
+FROM node:22-alpine AS builder
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY tsconfig.json ./
+COPY src ./src
+
+RUN node_modules/.bin/esbuild src/server/thumbnailer.ts \
+      --bundle --platform=node --target=node22 --format=cjs \
+      --outfile=dist/thumbnailer.cjs \
+      --external:bufferutil --external:utf-8-validate
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+# 워커는 ffmpeg 없이는 아무것도 못 한다.
+RUN apk add --no-cache ffmpeg
+
+RUN addgroup -g 1001 -S nodejs && adduser -u 1001 -S worker -G nodejs
+COPY --from=builder --chown=worker:nodejs /app/dist/thumbnailer.cjs ./thumbnailer.cjs
+
+USER worker
+
+# 포트를 열지 않는 워커다. ffmpeg가 실행 가능한지로 판단한다.
+HEALTHCHECK --interval=60s --timeout=10s --start-period=15s --retries=3 \
+  CMD ffmpeg -version > /dev/null 2>&1 || exit 1
+
+CMD ["node", "thumbnailer.cjs"]
