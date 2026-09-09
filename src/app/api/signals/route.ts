@@ -2,15 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/shared/lib/supabase-server';
 import { supabaseAdmin } from '@/shared/lib/supabase-admin';
 import { redis } from '@/shared/lib/redis';
-import {
-  MAX_BATCH,
-  MAX_DWELL_MS,
-  SIGNAL_KINDS,
-  type FeedSignal,
-} from '@/domains/feed/signals';
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+import { normalizeSignalEvents } from '@/domains/feed/services/normalize-signals';
 
 /** 10초에 배치 5회. 정상 사용은 훨씬 적게 보낸다 */
 const RATE_WINDOW_SEC = 10;
@@ -52,30 +44,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '잘못된 형식입니다' }, { status: 400 });
     }
 
-    const rows = events
-      .slice(0, MAX_BATCH)
-      .filter((e): e is FeedSignal => {
-        if (!e || typeof e !== 'object') return false;
-        const ev = e as FeedSignal;
-        return (
-          (ev.targetType === 'stream' || ev.targetType === 'post') &&
-          typeof ev.targetId === 'string' &&
-          UUID_RE.test(ev.targetId) &&
-          SIGNAL_KINDS.includes(ev.kind)
-        );
-      })
-      .map((e) => ({
-        user_id: user.id,
-        target_type: e.targetType,
-        target_id: e.targetId,
-        kind: e.kind,
-        // 위조 방지 상한. DB에도 CHECK가 있어 이중으로 막힌다.
-        dwell_ms:
-          typeof e.dwellMs === 'number' && Number.isFinite(e.dwellMs)
-            ? Math.min(Math.max(Math.trunc(e.dwellMs), 0), MAX_DWELL_MS)
-            : null,
-        category: typeof e.category === 'string' ? e.category : null,
-      }));
+    // 상한·형식 검증은 normalize-signals.ts에 있다 (순수 함수라야 테스트가 된다)
+    const rows = normalizeSignalEvents(user.id, events);
 
     if (rows.length === 0) return NextResponse.json({ ok: true });
 
