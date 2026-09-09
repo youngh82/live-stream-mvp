@@ -134,6 +134,30 @@ failed publish. **The more popular you were, the less able you were to go live.*
 Now `on-publish` pushes one event onto a Redis channel and returns immediately. The chat server
 consumes it and pages through followers 1,000 at a time.
 
+### The live set lived only in Redis, and nothing could put it back
+
+`live:streams` — the sorted set the feed reads — was written by the `on-publish` webhook and
+nowhere else. That webhook fires when a broadcast *starts*, so restarting Redis emptied the feed
+while five people were still publishing, and **nothing would ever restore them**: someone already
+live generates no further events, so the only fix was making every streamer stop and start again.
+
+The fix is reconciliation against the one component that actually knows. Redis and Postgres both
+hold copies written from webhooks, and webhooks get lost; MediaMTX holds the sessions themselves.
+On startup the app asks it which paths are publishing and aligns both copies to that answer — in
+both directions, so a lost `on-publish` and a lost `on-unpublish` are corrected by the same pass.
+It is the same "ask the media server" check that already rejects forged webhooks.
+
+Two details decide whether this helps or hurts:
+
+- **The sort key is preserved.** That score is the feed cursor. Rewriting it with the current
+  time would reorder every live stream, so viewers mid-scroll would skip items or see them twice.
+  The original `started_at` from Postgres is reused, falling back to the media server's ready time.
+- **An unreachable media server changes nothing.** Treating a failed query as "nobody is live"
+  would wipe every publishing stream — causing the exact outage this code exists to repair.
+
+Verified by running five broadcasts, `FLUSHALL`-ing Redis, and confirming the feed returned
+`data: []` and then came back complete with byte-identical scores.
+
 ### Redis is a cache; Postgres is the truth
 
 Chat bans are checked on every message, so they're cached in Redis with a TTL that doubles as
