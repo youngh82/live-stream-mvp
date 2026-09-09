@@ -99,3 +99,47 @@ export async function kickPublisher(path: string): Promise<number> {
 
   return kicked;
 }
+
+/** 지금 실제로 송출 중인 경로 하나 */
+export interface PublishingPath {
+  /** 경로 이름 = streams.id */
+  name: string;
+  /** MediaMTX가 이 경로를 ready로 본 시각. 없을 수 있다 */
+  readyTime: string | null;
+}
+
+/**
+ * 지금 송출 중인 모든 경로.
+ *
+ * 재조정(reconcile-live.ts)의 기준이 되는 **유일한 진실**이다.
+ * Redis도 Postgres도 웹훅을 받아 적은 사본일 뿐이고, 웹훅은 유실될 수 있다.
+ *
+ * 페이지네이션이 있다. 기본 페이지 크기를 넘기면 나머지를 조용히 놓치고,
+ * 그러면 멀쩡히 방송 중인 사람이 재조정 후 피드에서 사라진다.
+ */
+export async function listPublishingPaths(): Promise<PublishingPath[]> {
+  const found: PublishingPath[] = [];
+  const perPage = 500;
+
+  for (let page = 0; ; page++) {
+    const res = await fetch(
+      `${API_BASE}/v3/paths/list?page=${page}&itemsPerPage=${perPage}`,
+      { signal: AbortSignal.timeout(5000), cache: 'no-store' },
+    );
+    if (!res.ok) throw new Error(`MediaMTX API ${res.status}`);
+
+    const body = (await res.json()) as {
+      pageCount?: number;
+      items?: Array<{ name?: string; ready?: boolean; readyTime?: string | null }>;
+    };
+
+    for (const item of body.items ?? []) {
+      if (item.ready !== true || !item.name) continue;
+      found.push({ name: item.name, readyTime: item.readyTime ?? null });
+    }
+
+    if (page + 1 >= (body.pageCount ?? 1)) break;
+  }
+
+  return found;
+}
