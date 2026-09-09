@@ -250,12 +250,14 @@ Roughly 13,500 lines across 126 TypeScript files, organized by domain
 
 ### Not done
 
-- ⬜ **Deployment.** Nothing is deployed. The plan is a **single EC2 host running the whole
-  stack under Docker Compose** behind a reverse proxy — not Vercel plus EC2, because the chat
-  server holds long-lived Socket.IO connections and a request-scoped serverless platform cannot
-  host it. Two things have to be settled before that: WebRTC ICE over UDP has only ever failed
-  inside Docker on macOS and is unverified on Linux, and the media config still advertises
-  `127.0.0.1` as its ICE host with no STUN/TURN configured.
+- 🔄 **Deployment.** The whole stack is **containerized and verified running** — app, chat,
+  thumbnail worker, Redis and MediaMTX come up together under
+  `infra/docker-compose.prod.yml`, all five healthy, with `/api/health` reporting Redis,
+  Postgres and the MediaMTX API all reachable across the compose network. It is **not on a
+  public host yet**. Two things are still unsettled and only a real deployment can settle them:
+  WebRTC ICE over UDP has only ever failed inside Docker on macOS and is unverified on Linux,
+  and `webrtcAdditionalHosts` must be a public address before anyone outside can watch — with
+  STUN configured but TURN untested, viewers behind symmetric NAT may still fail to connect.
 - 🔄 **Testing.** Unit tests cover the money, cache, and input-validation logic (47 tests, run in
   CI). Still missing an **end-to-end suite** — login → broadcast → watch from a second context →
   tip → chat has only ever been verified by hand, and WebRTC makes that expensive to automate.
@@ -333,6 +335,27 @@ invisible: **payout fee arithmetic** (two `Math.floor` calls that must still sat
 the **ban cache** (a missing negative-cache entry sends every ordinary chat message to Postgres),
 and **taste-signal validation** (forgeable client input that becomes feed ranking). There is no
 coverage target — a test that exists to move a number is visible in review.
+
+### Containers
+
+```bash
+cd infra
+docker compose -f docker-compose.prod.yml --env-file ../.env.production up -d --build
+```
+
+Five services: the Next.js app, the chat server, the thumbnail worker, Redis (AOF on) and
+MediaMTX. Three things about this are worth knowing before changing it:
+
+- **`NEXT_PUBLIC_*` are baked in at build time**, not read at runtime, so they are build args.
+  Setting them only under `environment` leaves a deployed app calling `localhost` and failing
+  silently.
+- **MediaMTX runs a different config in production** (`mediamtx.prod.yml`). The dev one
+  terminates TLS with a local mkcert certificate that does not exist in a container, and binds
+  its control API to loopback — which the app can no longer reach once it is a separate
+  container.
+- **The app image does not use `output: 'standalone'`.** With pnpm it builds cleanly and then
+  dies on startup with a missing transitive module. `next start` with production dependencies
+  costs image size and works.
 
 ### CI
 

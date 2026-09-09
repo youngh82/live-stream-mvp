@@ -1,0 +1,44 @@
+# 채팅 서버 (Socket.IO).
+#
+# **이 프로세스가 Vercel에 못 올라가는 이유가 곧 이 파일이 있는 이유다.**
+# 롱커넥션을 붙들고 Redis pub/sub을 구독한다 — 요청 단위로 죽었다 살아나는
+# 런타임에서는 성립하지 않는다.
+#
+# esbuild로 한 파일로 번들해서 런타임 이미지에 node_modules를 아예 두지 않는다.
+# 그냥 tsx로 실행하면 next(282MB)·lucide-react·hls.js처럼 채팅 서버가 건드리지도
+# 않는 프론트엔드 의존성까지 통째로 따라와 이미지가 1GB를 넘는다.
+#
+# syntax=docker/dockerfile:1
+
+FROM node:22-alpine AS builder
+RUN corepack enable
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY tsconfig.json ./
+COPY src ./src
+
+# bufferutil/utf-8-validate는 ws의 선택적 네이티브 가속이다.
+# 없으면 순수 JS 경로로 동작하므로 번들에서 뺀다.
+RUN node_modules/.bin/esbuild src/server/chat.ts \
+      --bundle --platform=node --target=node22 --format=cjs \
+      --outfile=dist/chat.cjs \
+      --external:bufferutil --external:utf-8-validate
+
+FROM node:22-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production CHAT_PORT=3001
+
+RUN addgroup -g 1001 -S nodejs && adduser -u 1001 -S chat -G nodejs
+COPY --from=builder --chown=chat:nodejs /app/dist/chat.cjs ./chat.cjs
+
+USER chat
+EXPOSE 3001
+
+# Socket.IO 핸드셰이크. 프로세스가 실제로 응답하는지 본다.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3001/socket.io/?EIO=4&transport=polling').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+CMD ["node", "chat.cjs"]

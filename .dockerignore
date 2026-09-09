@@ -1,0 +1,29 @@
+# 빌드 컨텍스트에서 뺄 것. 여기 빠뜨리면 이미지에 그대로 들어간다.
+
+node_modules
+.next
+.git
+.github
+
+# 시크릿 — 이미지에 절대 들어가면 안 된다. 환경변수로만 주입한다.
+.env
+.env.*
+!.env.example
+certs/
+*.key
+*.crt
+
+# 개발·데모 부산물
+.demo-streams
+.demo-broadcast.pids
+.demo-logs/
+coverage/
+*.tsbuildinfo
+
+# 내부 작업 문서 (한국어). 이미지에 들어갈 이유가 없다.
+docs/
+README.md
+*.gif
+*.png
+
+.DS_Store

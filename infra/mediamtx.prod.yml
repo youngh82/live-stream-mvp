@@ -1,0 +1,78 @@
+# MediaMTX — 프로덕션 설정.
+#
+# 개발용 infra/mediamtx.yml 과 다른 점만 적어둔다. 이 셋을 안 바꾸면
+# 컨테이너가 아예 안 뜨거나, 떠도 아무도 시청할 수 없다.
+#
+#  1. TLS를 여기서 하지 않는다. 개발 설정은 mkcert 인증서(certs/dev.crt)를
+#     읽는데 컨테이너에 그 파일이 없어서 **기동 즉시 죽는다**
+#     (`open certs/dev.crt: no such file or directory`).
+#     프로덕션은 앞단 리버스 프록시가 TLS를 종단한다.
+#  2. apiAddress를 127.0.0.1이 아니라 :9997로 연다. 개발에서는 앱과 미디어가
+#     같은 호스트라 루프백으로 충분했지만, 컨테이너에서는 앱이 **다른 컨테이너**다.
+#     루프백으로 두면 on-publish 검증과 /api/health의 mediamtx 항목이 전부 실패한다.
+#     compose에서 이 포트를 게시하지 않으므로 외부에는 여전히 닫혀 있다.
+#  3. 웹훅 주소가 localhost:3000이 아니라 compose 서비스명 app:3000이다.
+
+logLevel: info
+logDestinations: [stdout]
+
+api: yes
+# 내부 네트워크에만 열린다. compose가 이 포트를 게시하지 않는다.
+apiAddress: :9997
+
+rtmp: yes
+rtmpAddress: :1935
+
+hls: yes
+hlsAddress: :8890
+hlsAlwaysRemux: true
+hlsSegmentCount: 7
+hlsSegmentDuration: 500ms
+hlsPartDuration: 100ms
+hlsSegmentMaxSize: 50M
+hlsAllowOrigins: ['*']
+hlsVariant: lowLatency
+
+rtsp: no
+srt: no
+
+webrtc: yes
+webrtcAddress: :8889
+# 리버스 프록시가 TLS를 종단한다. 컨테이너 안은 평문이다.
+webrtcEncryption: no
+
+# ⚠️ NAT 뒤 시청자를 위한 STUN. 비워두면 대부분의 시청자가 연결에 실패한다.
+# 대칭형 NAT(모바일 데이터·회사 방화벽)에서는 STUN으로도 안 되며,
+# 그때는 coturn TURN 서버를 직접 띄워야 한다 — 실제 시청 테스트로만 판명된다.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+# ⚠️ 반드시 공개 IP 또는 도메인으로 바꿀 것. 127.0.0.1로 두면 서버가
+# 자기 자신을 ICE 후보로 광고해서 아무도 영상을 받지 못한다.
+# 환경변수 MTX_WEBRTCADDITIONALHOSTS 로 덮어쓸 수 있다.
+webrtcAdditionalHosts: []
+webrtcLocalUDPAddress: :8189
+
+authMethod: http
+# compose 서비스명. 같은 네트워크의 앱 컨테이너를 가리킨다.
+authHTTPAddress: http://app:3000/api/stream/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+pathDefaults:
+  runOnOnline: >
+    curl -s -X POST http://app:3000/api/stream/on-publish
+    -H "Content-Type: application/json"
+    -d '{"path": "$MTX_PATH"}'
+    || true
+  runOnOnlineRestart: false
+  runOnOffline: >
+    curl -s -X POST http://app:3000/api/stream/on-unpublish
+    -H "Content-Type: application/json"
+    -d '{"path": "$MTX_PATH"}'
+    || true
+
+paths:
+  all_others:
