@@ -250,10 +250,15 @@ Roughly 13,500 lines across 126 TypeScript files, organized by domain
 
 ### Not done
 
-- ⬜ **Deployment.** Nothing is deployed. Vercel + EC2 is planned; the Docker/WebRTC UDP issue
-  needs verifying on Linux first.
-- ⬜ **Integration testing.** No E2E suite. Verified by hand plus two regression scripts
-  (21 security checks, 46 payout checks).
+- ⬜ **Deployment.** Nothing is deployed. The plan is a **single EC2 host running the whole
+  stack under Docker Compose** behind a reverse proxy — not Vercel plus EC2, because the chat
+  server holds long-lived Socket.IO connections and a request-scoped serverless platform cannot
+  host it. Two things have to be settled before that: WebRTC ICE over UDP has only ever failed
+  inside Docker on macOS and is unverified on Linux, and the media config still advertises
+  `127.0.0.1` as its ICE host with no STUN/TURN configured.
+- 🔄 **Testing.** Unit tests cover the money, cache, and input-validation logic (47 tests, run in
+  CI). Still missing an **end-to-end suite** — login → broadcast → watch from a second context →
+  tip → chat has only ever been verified by hand, and WebRTC makes that expensive to automate.
 - 🔄 **Payouts.** Code, schema, and UI are complete and the fee math is verified, but the Toss
   sub-payment service is still pending approval, so **seller registration and a real payout round
   trip have never run**. The UI shows a "not configured" banner rather than pretending otherwise.
@@ -314,11 +319,28 @@ webhook, and land in the same Redis live set the feed reads. Nothing is stubbed.
 ### Verification
 
 ```bash
+pnpm test              # 47 unit tests (Vitest) — fee math, ban cache, signal validation
 pnpm verify:security   # 21 checks — RLS, column grants, key exposure, media config
 pnpm verify:payout     # 46 checks — fee invariants, JWE round trip, DB payout functions
 ```
 
-`verify:security` needs the dev stack running. `verify:payout` runs without any Toss credentials.
+`pnpm test` needs nothing running. `verify:security` needs the dev stack; `verify:payout` needs a
+database but no Toss credentials.
+
+The unit tests deliberately cover only the three places where being wrong is expensive and
+invisible: **payout fee arithmetic** (two `Math.floor` calls that must still satisfy
+`gross = fee + withholding + net`, an invariant otherwise only enforced by a database constraint),
+the **ban cache** (a missing negative-cache entry sends every ordinary chat message to Postgres),
+and **taste-signal validation** (forgeable client input that becomes feed ranking). There is no
+coverage target — a test that exists to move a number is visible in review.
+
+### CI
+
+`.github/workflows/ci.yml` runs lint, `tsc --noEmit`, the unit tests, and a production build on
+every push and pull request. It does **not** yet run the two verification scripts: both need a
+live stack, and `verify:payout` additionally checks the `anon`/`authenticated` role grants, so a
+plain Postgres service container is not enough. Those get wired in as service containers once the
+stack is containerized for deployment.
 
 ---
 
