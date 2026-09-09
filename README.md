@@ -349,10 +349,14 @@ MediaMTX. Three things about this are worth knowing before changing it:
 - **`NEXT_PUBLIC_*` are baked in at build time**, not read at runtime, so they are build args.
   Setting them only under `environment` leaves a deployed app calling `localhost` and failing
   silently.
-- **MediaMTX runs a different config in production** (`mediamtx.prod.yml`). The dev one
-  terminates TLS with a local mkcert certificate that does not exist in a container, and binds
-  its control API to loopback — which the app can no longer reach once it is a separate
-  container.
+- **MediaMTX runs on the host network, not with published ports**, and on a different config
+  (`mediamtx.prod.yml`). Docker's IPv6 port publishing rewrites the source address, and ICE
+  matches candidate pairs by source address — so publishing ports breaks exactly the traffic it
+  is forwarding. The dev config is also unusable in a container: it terminates TLS with a local
+  mkcert certificate that is not there.
+- **The ICE host list carries both an IPv4 and an IPv6 address.** Mobile carrier networks are
+  IPv6, and their IPv4 path is behind a symmetric NAT. Omitting IPv6 leaves playback working on
+  localhost, Wi-Fi and desktop while failing on mobile data — see the engineering log.
 - **The app image does not use `output: 'standalone'`.** With pnpm it builds cleanly and then
   dies on startup with a missing transitive module. `next start` with production dependencies
   costs image size and works.

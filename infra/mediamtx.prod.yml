@@ -1,24 +1,36 @@
 # MediaMTX — 프로덕션 설정.
 #
-# 개발용 infra/mediamtx.yml 과 다른 점만 적어둔다. 이 셋을 안 바꾸면
-# 컨테이너가 아예 안 뜨거나, 떠도 아무도 시청할 수 없다.
+# 개발용 infra/mediamtx.yml 과 다른 점만 적어둔다. 이것들을 안 바꾸면
+# 컨테이너가 아예 안 뜨거나, 떠도 (특히 모바일에서) 아무도 시청할 수 없다.
 #
-#  1. TLS를 여기서 하지 않는다. 개발 설정은 mkcert 인증서(certs/dev.crt)를
+#  1. **TLS를 여기서 하지 않는다.** 개발 설정은 mkcert 인증서(certs/dev.crt)를
 #     읽는데 컨테이너에 그 파일이 없어서 **기동 즉시 죽는다**
 #     (`open certs/dev.crt: no such file or directory`).
 #     프로덕션은 앞단 리버스 프록시가 TLS를 종단한다.
-#  2. apiAddress를 127.0.0.1이 아니라 :9997로 연다. 개발에서는 앱과 미디어가
-#     같은 호스트라 루프백으로 충분했지만, 컨테이너에서는 앱이 **다른 컨테이너**다.
-#     루프백으로 두면 on-publish 검증과 /api/health의 mediamtx 항목이 전부 실패한다.
-#     compose에서 이 포트를 게시하지 않으므로 외부에는 여전히 닫혀 있다.
-#  3. 웹훅 주소가 localhost:3000이 아니라 compose 서비스명 app:3000이다.
+#
+#  2. **관리 API를 compose 브리지 게이트웨이에만 바인딩한다.**
+#     이 컨테이너는 호스트 네트워크로 돌기 때문에(도커 포트 게시가 IPv6 ICE를
+#     깨뜨린다 — 아래 4번) `:9997`로 두면 인터넷에 그대로 열린다.
+#     172.28.0.1은 앱·워커 컨테이너에서만 닿는 주소다.
+#
+#  3. **웹훅 주소가 127.0.0.1:3000이다.** 앱은 브리지 위에 있지만 루프백에만
+#     포트를 게시하고, mediamtx는 호스트 네트워크라 그대로 닿는다.
+#     compose 서비스명(app:3000)은 여기서 해석되지 않는다.
+#
+#  4. **webrtcAdditionalHosts에 IPv4와 IPv6를 둘 다 넣어야 한다.**
+#     모바일 통신사 망은 IPv6이고 IPv4 쪽은 대칭형 NAT다. IPv6를 빠뜨리면
+#     **모바일 데이터 시청자만** 조용히 실패한다 (ISSUES U-13, EC2 실측).
+#     ICE-TCP 후보도 함께 준다 — UDP가 막힌 망을 위한 예비다.
 
 logLevel: info
 logDestinations: [stdout]
 
 api: yes
-# 내부 네트워크에만 열린다. compose가 이 포트를 게시하지 않는다.
-apiAddress: :9997
+# **compose 브리지의 게이트웨이 주소에만 바인딩한다.**
+# 호스트 네트워크로 돌기 때문에 `:9997`로 두면 인터넷에 그대로 열린다.
+# 이 주소는 앱·워커 컨테이너에서만 닿고 외부에서는 닿지 않는다.
+# (docker-compose.prod.yml에서 서브넷을 고정해 둔 이유가 이것이다)
+apiAddress: 172.28.0.1:9997
 
 rtmp: yes
 rtmpAddress: :1935
@@ -35,6 +47,9 @@ hlsVariant: lowLatency
 
 rtsp: no
 srt: no
+# 쓰지 않는 프로토콜은 닫는다. 기본값이 yes라서 8892/8893을 공개로 연다 —
+# 호스트 네트워크로 도는 지금은 그게 곧 인터넷 노출이다.
+moq: no
 
 webrtc: yes
 webrtcAddress: :8889
@@ -47,15 +62,21 @@ webrtcEncryption: no
 webrtcICEServers2:
   - url: stun:stun.l.google.com:19302
 
-# ⚠️ 반드시 공개 IP 또는 도메인으로 바꿀 것. 127.0.0.1로 두면 서버가
-# 자기 자신을 ICE 후보로 광고해서 아무도 영상을 받지 못한다.
-# 환경변수 MTX_WEBRTCADDITIONALHOSTS 로 덮어쓸 수 있다.
+# ⚠️ 반드시 공개 주소로 채울 것. 비워두면 아무도 영상을 받지 못한다.
+# 환경변수 MTX_WEBRTCADDITIONALHOSTS(쉼표 구분)로 채운다.
+#
+# **IPv4와 IPv6를 둘 다 넣어야 한다.** 모바일 통신사 망은 IPv6이고,
+# IPv4 쪽은 대칭형 NAT라 STUN만으로는 못 뚫는다. IPv6를 빠뜨리면
+# 모바일 데이터 시청자만 조용히 연결에 실패한다 — 로컬·Wi-Fi에서는
+# 멀쩡히 보이므로 배포 후에야 알게 된다 (ISSUES U-13, EC2 실측).
 webrtcAdditionalHosts: []
 webrtcLocalUDPAddress: :8189
+# UDP가 막힌 망을 위한 대체 경로. 후보를 하나 더 주는 것뿐이라 비용이 없다.
+webrtcLocalTCPAddress: :8189
 
 authMethod: http
-# compose 서비스명. 같은 네트워크의 앱 컨테이너를 가리킨다.
-authHTTPAddress: http://app:3000/api/stream/auth
+# 앱은 127.0.0.1:3000에만 게시된다. mediamtx는 호스트 네트워크라 그대로 닿는다.
+authHTTPAddress: http://127.0.0.1:3000/api/stream/auth
 authHTTPExclude:
   - action: api
   - action: metrics
@@ -63,13 +84,13 @@ authHTTPExclude:
 
 pathDefaults:
   runOnOnline: >
-    curl -s -X POST http://app:3000/api/stream/on-publish
+    curl -s -X POST http://127.0.0.1:3000/api/stream/on-publish
     -H "Content-Type: application/json"
     -d '{"path": "$MTX_PATH"}'
     || true
   runOnOnlineRestart: false
   runOnOffline: >
-    curl -s -X POST http://app:3000/api/stream/on-unpublish
+    curl -s -X POST http://127.0.0.1:3000/api/stream/on-unpublish
     -H "Content-Type: application/json"
     -d '{"path": "$MTX_PATH"}'
     || true
