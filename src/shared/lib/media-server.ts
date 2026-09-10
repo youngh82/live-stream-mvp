@@ -10,25 +10,63 @@
 const API_BASE = process.env.MEDIAMTX_API_URL || 'http://127.0.0.1:9997';
 
 /**
+ * 송출 중인 연결 목록. 방송자는 여러 프로토콜 중 하나로 들어와 있으므로 전부 훑는다.
+ * 꺼져 있는 프로토콜(rtsp·srt)은 404를 돌려주므로 건너뛴다.
+ */
+const PUBLISH_ENDPOINTS = [
+  'rtmpconns',
+  'webrtcsessions',
+  'rtspsessions',
+  'srtconns',
+] as const;
+
+interface Publisher {
+  endpoint: (typeof PUBLISH_ENDPOINTS)[number];
+  id: string;
+  path: string;
+}
+
+async function listPublishers(): Promise<Publisher[]> {
+  const found: Publisher[] = [];
+  for (const endpoint of PUBLISH_ENDPOINTS) {
+    const res = await fetch(`${API_BASE}/v3/${endpoint}/list`, {
+      signal: AbortSignal.timeout(3000),
+      cache: 'no-store',
+    });
+    if (!res.ok) continue;
+    const { items } = (await res.json()) as {
+      items?: Array<{ id: string; path?: string; state?: string }>;
+    };
+    for (const item of items ?? []) {
+      // 시청자·인증 대기 중인 연결은 빼고, 실제로 밀어넣고 있는 연결만
+      if (item.state === 'publish' && item.path) {
+        found.push({ endpoint, id: item.id, path: item.path });
+      }
+    }
+  }
+  return found;
+}
+
+/**
  * 해당 경로가 실제로 송출 중인지 확인.
  *
- * **`/v3/paths/get/<경로>`를 쓰지 않는다.** 송출 인증(`/api/stream/auth`)은
- * MediaMTX가 그 경로의 인증 응답을 기다리는 동안 불린다. 그 사이 같은 경로의
- * `paths/get`은 응답하지 않고 막힌다(실측 5초+). 인증이 이 조회를 기다리고,
- * MediaMTX는 인증을 기다리는 교착 상태가 되어 타임아웃 → 거절로 끝났다.
- * 결과: DB에 live가 남은 방송자가 **재접속을 못 했다** (ISSUES #32).
- * 목록 조회(`paths/list`)는 같은 순간에도 0.1초 안에 답한다.
+ * **경로 API(`paths/get`, `paths/list`)를 쓰지 않는다 — 연결 목록을 본다.**
+ * 송출 인증(`/api/stream/auth`)은 MediaMTX가 그 경로의 인증 응답을 기다리는
+ * 동안 불린다. 그 사이 경로 API는 막힌다(동시 측정: `paths/list` 최대 5.5초).
+ * 인증은 이 조회를 기다리고 MediaMTX는 인증을 기다리는 교착이 되어, 타임아웃 →
+ * 거절로 끝났다. 결과: DB에 live가 남은 방송자가 **재접속을 못 했다** (ISSUES #32).
+ * 연결 목록 API는 같은 순간에도 2ms 안에 답한다.
  */
 export async function isPublishing(path: string): Promise<boolean> {
   try {
-    return (await listPublishingPaths()).some((p) => p.name === path);
+    return (await listPublishers()).some((p) => p.path === path);
   } catch (err) {
     console.error('[MediaMTX] API 조회 실패:', err);
     throw err;
   }
 }
 
-/** 해당 경로의 송출이 실제로 끝났는지 확인 (같은 이유로 목록에서 찾는다) */
+/** 해당 경로의 송출이 실제로 끝났는지 확인 (같은 이유로 연결 목록을 본다) */
 export async function isStopped(path: string): Promise<boolean> {
   return !(await isPublishing(path));
 }
@@ -40,53 +78,24 @@ export async function isStopped(path: string): Promise<boolean> {
  * 목록에서 안 보일 뿐 URL을 아는 사람은 그대로 본다. 운영자가 방송을 내릴 때는
  * 미디어 서버의 세션을 실제로 끊어야 한다.
  *
- * MediaMTX에는 "경로를 끊는" API가 없다. 프로토콜별 연결 목록에서 해당 경로를
- * 찾아 하나씩 kick한다. 방송자는 여러 프로토콜 중 하나로 들어와 있으므로
- * 전부 훑는다.
+ * MediaMTX에는 "경로를 끊는" API가 없다. 연결 목록에서 해당 경로를 찾아 kick한다.
+ * 시청자까지 끊을 필요는 없다 — 송출이 끊기면 알아서 끝난다.
  */
-const PUBLISH_ENDPOINTS = [
-  'rtmpconns',
-  'webrtcsessions',
-  'rtspsessions',
-  'srtconns',
-] as const;
-
-interface SessionItem {
-  id: string;
-  path?: string;
-  state?: string;
-}
-
 export async function kickPublisher(path: string): Promise<number> {
   let kicked = 0;
-
-  for (const endpoint of PUBLISH_ENDPOINTS) {
+  for (const p of await listPublishers()) {
+    if (p.path !== path) continue;
     try {
-      const res = await fetch(`${API_BASE}/v3/${endpoint}/list`, {
-        signal: AbortSignal.timeout(3000),
-        cache: 'no-store',
-      });
-      if (!res.ok) continue;
-
-      const { items } = (await res.json()) as { items?: SessionItem[] };
-
-      for (const item of items ?? []) {
-        if (item.path !== path) continue;
-        // 시청자까지 끊을 필요는 없다. 송출이 끊기면 알아서 끝난다.
-        if (item.state && item.state !== 'publish') continue;
-
-        const kickRes = await fetch(
-          `${API_BASE}/v3/${endpoint}/kick/${encodeURIComponent(item.id)}`,
-          { method: 'POST', signal: AbortSignal.timeout(3000) },
-        );
-        if (kickRes.ok) kicked++;
-      }
+      const res = await fetch(
+        `${API_BASE}/v3/${p.endpoint}/kick/${encodeURIComponent(p.id)}`,
+        { method: 'POST', signal: AbortSignal.timeout(3000) },
+      );
+      if (res.ok) kicked++;
     } catch (err) {
-      // 한 프로토콜이 실패해도 나머지는 시도한다
-      console.error(`[MediaMTX] ${endpoint} kick 실패:`, err);
+      // 하나가 실패해도 나머지는 시도한다
+      console.error(`[MediaMTX] ${p.endpoint} kick 실패:`, err);
     }
   }
-
   return kicked;
 }
 
