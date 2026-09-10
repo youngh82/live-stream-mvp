@@ -37,8 +37,8 @@ COPY --from=builder --chown=chat:nodejs /app/dist/chat.cjs ./chat.cjs
 USER chat
 EXPOSE 3001
 
-# Socket.IO 핸드셰이크. 프로세스가 실제로 응답하는지 본다.
+# 프로세스가 응답하고 Redis 연결 3개가 살아 있는지 본다 (chat.ts의 /health).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:3001/socket.io/?EIO=4&transport=polling').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "chat.cjs"]
