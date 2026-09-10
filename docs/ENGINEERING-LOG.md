@@ -244,6 +244,41 @@ restore the loop via A→B→A.
 
 ## Feed and realtime
 
+### Restarting Redis emptied the feed, permanently
+
+**Symptom.** `live:streams` — the sorted set the feed reads — is written by the
+`on-publish` webhook and nowhere else. Flushing Redis with five broadcasts running
+left the feed returning `{"data":[],"has_more":false}` while all five were still
+publishing, and nothing ever brought them back.
+
+**Cause.** The only event that repopulates the set fires when a broadcast *starts*.
+Someone already live generates no further events, so the sole recovery was asking
+every streamer to stop and start again. Redis held state with no source of truth
+behind it.
+
+**Fix.** Reconcile against the component that actually knows. Redis and Postgres
+both hold copies written from webhooks, and webhooks get lost; MediaMTX holds the
+sessions themselves. On startup the app asks which paths are publishing and aligns
+both copies to that answer — in both directions, so a lost `on-publish` and a lost
+`on-unpublish` are corrected by the same pass. It reuses the "ask the media server"
+check that already rejects forged webhooks.
+
+Two decisions carry the weight, and both are covered by tests:
+
+- **The sort key is preserved.** That score is the feed cursor. Rewriting it with
+  the current time reorders every live stream, so a viewer mid-scroll skips items
+  or sees them twice. The original `started_at` is reused, falling back to the
+  media server's ready time.
+- **An unreachable media server changes nothing.** Treating a failed query as
+  "nobody is live" would wipe every publishing stream — causing the outage this
+  code exists to repair.
+
+**Lesson.** AOF persistence narrows the window; it does not close it, and it does
+nothing for state that drifted rather than vanished. A cache holding data with no
+authority behind it needs a path back to the authority, not a better cache.
+
+---
+
 ### The feed dead-ended, and swiping gave no feedback at all
 
 **Symptom.** After the last live stream, swiping did nothing — no bounce, no
