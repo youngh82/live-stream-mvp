@@ -70,6 +70,12 @@ webrtcICEServers2:
 # 모바일 데이터 시청자만 조용히 연결에 실패한다 — 로컬·Wi-Fi에서는
 # 멀쩡히 보이므로 배포 후에야 알게 된다 (ISSUES U-13, EC2 실측).
 webrtcAdditionalHosts: []
+# **인터페이스 주소를 후보로 내보내지 않는다 — 위의 공개 주소만 쓴다.**
+# 호스트 네트워크라서 기본값(yes)이면 127.0.0.1, 도커 브리지(172.17.0.1·172.28.0.1),
+# VPC 사설 IP까지 전부 후보로 나간다. 밖에서는 닿지 않는 주소들이고, 클라이언트가
+# 그쪽을 두드리다 10초 연결 제한에 걸린다. 부하 테스트에서 일반 회선 기준 5%,
+# 같은 VPC에서 15~27%의 시청자가 영상을 한 번도 못 받았다 (ISSUES #31).
+webrtcIPsFromInterfaces: no
 webrtcLocalUDPAddress: :8189
 # UDP가 막힌 망을 위한 대체 경로. 후보를 하나 더 주는 것뿐이라 비용이 없다.
 webrtcLocalTCPAddress: :8189
