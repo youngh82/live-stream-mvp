@@ -1,5 +1,7 @@
 import { config } from 'dotenv';
 config({ path: '.env.local' });
+import { initServerSentry } from './sentry';
+initServerSentry('thumbnailer');
 
 import { spawn } from 'child_process';
 import { createClient } from '@supabase/supabase-js';

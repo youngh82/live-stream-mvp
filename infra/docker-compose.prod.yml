@@ -36,6 +36,7 @@ services:
         NEXT_PUBLIC_WHEP_BASE_URL: ${NEXT_PUBLIC_WHEP_BASE_URL}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
         NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_SENTRY_DSN: ${NEXT_PUBLIC_SENTRY_DSN:-}
     environment:
       NODE_ENV: production
       REDIS_URL: redis://redis:6379
@@ -50,6 +51,8 @@ services:
       TOSS_SECRET_KEY: ${TOSS_SECRET_KEY:-}
       TOSS_PAYOUT_SECURITY_KEY: ${TOSS_PAYOUT_SECURITY_KEY:-}
       APP_URL: ${APP_URL}
+      # 에러 수집. 비어 있으면 끈다 (src/instrumentation.ts)
+      SENTRY_DSN: ${SENTRY_DSN_APP:-}
     ports:
       - "127.0.0.1:3000:3000"   # 리버스 프록시만 접근한다. 외부 직접 노출 금지
     depends_on:
@@ -68,6 +71,7 @@ services:
       CHAT_PORT: 3001
       REDIS_URL: redis://redis:6379
       CORS_ORIGIN: ${APP_URL}
+      SENTRY_DSN: ${SENTRY_DSN_SERVER:-}
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       # TLS는 리버스 프록시가 종단한다. 컨테이너 안은 평문이다
@@ -94,6 +98,7 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       THUMBNAIL_INTERVAL_MS: ${THUMBNAIL_INTERVAL_MS:-30000}
       THUMBNAIL_CONCURRENCY: ${THUMBNAIL_CONCURRENCY:-3}
+      SENTRY_DSN: ${SENTRY_DSN_SERVER:-}
     depends_on:
       redis:
         condition: service_healthy

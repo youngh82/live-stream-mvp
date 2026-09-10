@@ -1,5 +1,7 @@
 import { config } from 'dotenv';
 config({ path: '.env.local' });
+import { initServerSentry } from './sentry';
+initServerSentry('chat');
 
 import { createServer as createHttpServer } from 'http';
 import { createServer as createHttpsServer } from 'https';
@@ -66,6 +68,18 @@ const pubClient = new Redis(REDIS_URL);
 const subClient = pubClient.duplicate();
 const eventClient = pubClient.duplicate();
 io.adapter(createAdapter(pubClient, subClient));
+
+// 업타임 모니터용. 앱의 /api/health는 채팅 서버를 보지 않는다 — 여기가 따로 있어야
+// 채팅만 죽은 상태를 안다. Socket.IO 핸드셰이크 URL은 HEAD에 400을 줘서
+// (UptimeRobot 기본이 HEAD) 모니터 대상으로 쓸 수 없었다.
+// 다른 경로는 건드리지 않는다 — Socket.IO가 자기 경로를 따로 처리한다.
+httpServer.on('request', (req, res) => {
+  if (req.url !== '/health') return;
+  // 명령을 보내지 않고 연결 상태만 본다. 모니터가 Redis에 부하를 주면 안 된다.
+  const ok = [pubClient, subClient, eventClient].every((c) => c.status === 'ready');
+  res.writeHead(ok ? 200 : 503, { 'Content-Type': 'application/json' });
+  res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: ok ? 'ok' : 'degraded' }));
+});
 
 // ============================================
 // 인증: JWT 로컬 검증 + 프로필 캐시
