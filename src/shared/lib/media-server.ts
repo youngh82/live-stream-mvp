@@ -9,38 +9,28 @@
 
 const API_BASE = process.env.MEDIAMTX_API_URL || 'http://127.0.0.1:9997';
 
-interface PathInfo {
-  name: string;
-  ready: boolean;
-  readyTime: string | null;
-  tracks: string[];
-}
-
-async function getPath(path: string): Promise<PathInfo | null> {
+/**
+ * 해당 경로가 실제로 송출 중인지 확인.
+ *
+ * **`/v3/paths/get/<경로>`를 쓰지 않는다.** 송출 인증(`/api/stream/auth`)은
+ * MediaMTX가 그 경로의 인증 응답을 기다리는 동안 불린다. 그 사이 같은 경로의
+ * `paths/get`은 응답하지 않고 막힌다(실측 5초+). 인증이 이 조회를 기다리고,
+ * MediaMTX는 인증을 기다리는 교착 상태가 되어 타임아웃 → 거절로 끝났다.
+ * 결과: DB에 live가 남은 방송자가 **재접속을 못 했다** (ISSUES #32).
+ * 목록 조회(`paths/list`)는 같은 순간에도 0.1초 안에 답한다.
+ */
+export async function isPublishing(path: string): Promise<boolean> {
   try {
-    const res = await fetch(
-      `${API_BASE}/v3/paths/get/${encodeURIComponent(path)}`,
-      { signal: AbortSignal.timeout(3000), cache: 'no-store' },
-    );
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`MediaMTX API ${res.status}`);
-    return (await res.json()) as PathInfo;
+    return (await listPublishingPaths()).some((p) => p.name === path);
   } catch (err) {
     console.error('[MediaMTX] API 조회 실패:', err);
     throw err;
   }
 }
 
-/** 해당 경로가 실제로 송출 중인지 확인 */
-export async function isPublishing(path: string): Promise<boolean> {
-  const info = await getPath(path);
-  return info?.ready === true;
-}
-
-/** 해당 경로의 송출이 실제로 끝났는지 확인 */
+/** 해당 경로의 송출이 실제로 끝났는지 확인 (같은 이유로 목록에서 찾는다) */
 export async function isStopped(path: string): Promise<boolean> {
-  const info = await getPath(path);
-  return info === null || info.ready === false;
+  return !(await isPublishing(path));
 }
 
 /**
