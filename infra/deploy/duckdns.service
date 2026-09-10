@@ -1,0 +1,12 @@
+[Unit]
+Description=Point the DuckDNS name at this instance's current addresses
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/live-stream-mvp/infra/deploy/duckdns-update.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

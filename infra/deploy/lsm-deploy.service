@@ -1,0 +1,8 @@
+[Unit]
+Description=live-stream-mvp: pull new images and redeploy if changed
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/live-stream-mvp/infra/deploy/lsm-deploy.sh
