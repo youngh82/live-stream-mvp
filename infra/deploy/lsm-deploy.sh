@@ -18,6 +18,7 @@ cd "$REPO_DIR"
 # systemd가 root로 돌리는데 저장소 소유자는 ubuntu라, 예외 없이는 git이
 # "dubious ownership"으로 거부한다. 서버 전역 설정 대신 여기서만 연다.
 git -c safe.directory="$REPO_DIR" fetch --quiet origin main
+before=$(git -c safe.directory="$REPO_DIR" rev-parse HEAD)
 git -c safe.directory="$REPO_DIR" reset --quiet --hard origin/main
 
 $COMPOSE pull --quiet 2>/dev/null || $COMPOSE pull
@@ -33,3 +34,21 @@ if grep -qE 'Recreat|Creat|Starting' <<<"$out"; then
   echo "$out" | grep -E 'Recreat|Creat|Start'
   docker image prune -f --filter "until=168h" > /dev/null 2>&1 || true
 fi
+
+# **파일로 붙인(bind mount) 설정은 `up -d`가 못 알아챈다.** compose 입장에서는
+# 컨테이너 정의가 그대로라 아무것도 안 한다. 게다가 git은 파일을 새 inode로 바꿔
+# 쓰므로, 돌고 있는 컨테이너는 계속 옛 파일을 본다. 바뀐 서비스만 다시 만든다.
+# (미디어 서버를 다시 만들면 진행 중인 방송이 몇 초 끊긴다 — 설정이 바뀔 때만이다)
+changed=$(git -c safe.directory="$REPO_DIR" diff --name-only "$before" HEAD -- \
+  infra/mediamtx.prod.yml infra/Caddyfile infra/Dockerfile.mediamtx)
+recreate=()
+grep -qx 'infra/mediamtx.prod.yml' <<<"$changed" && recreate+=(mediamtx)
+grep -qx 'infra/Caddyfile' <<<"$changed" && recreate+=(caddy)
+if [ ${#recreate[@]} -gt 0 ]; then
+  echo "[deploy] 설정 파일 변경 → 다시 만든다: ${recreate[*]} ($(date -Is))"
+  $COMPOSE up -d --no-build --force-recreate "${recreate[@]}"
+fi
+# 미디어 서버 이미지는 서버에서 빌드한다. 타이머가 자동으로 빌드하게 두지 않는다 (U-15).
+grep -qx 'infra/Dockerfile.mediamtx' <<<"$changed" &&
+  echo "[deploy] ⚠️ Dockerfile.mediamtx가 바뀌었다. 수동으로: $COMPOSE build mediamtx && up -d mediamtx"
+exit 0
