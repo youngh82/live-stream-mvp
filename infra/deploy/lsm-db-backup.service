@@ -1,0 +1,9 @@
+[Unit]
+Description=live-stream-mvp: dump the database to S3
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/live-stream-mvp/infra/deploy/lsm-db-backup.sh
