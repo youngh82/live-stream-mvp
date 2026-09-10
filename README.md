@@ -3,9 +3,10 @@
 A short-form **vertical live streaming** platform — TikTok-style swipe discovery, sub-second
 latency video, real-time chat, and tipping with a real payout pipeline.
 
-> **Status: in progress.** Streaming, discovery, chat, tipping, follows, search, and moderation
-> all work end to end on a local stack. Deployment, integration testing, and the payout
-> provider integration are **not** finished. See [Where this actually stands](#where-this-actually-stands).
+> **Status: deployed, in progress.** Live at **<https://livestream-mvp.duckdns.org>** (sign-up is
+> invite-only — see below). Streaming, discovery, chat, tipping, follows, search and moderation
+> all work end to end. An end-to-end test suite, monitoring, and the payout provider integration
+> are **not** finished. See [Where this actually stands](#where-this-actually-stands).
 
 <p align="center">
   <img src="docs/images/swipe-feed.gif" width="320" alt="Swiping between live streams — each one starts playing in about a second">
@@ -274,14 +275,13 @@ Roughly 13,500 lines across 126 TypeScript files, organized by domain
 
 ### Not done
 
-- 🔄 **Deployment.** The whole stack is **containerized and verified running** — app, chat,
-  thumbnail worker, Redis and MediaMTX come up together under
-  `infra/docker-compose.prod.yml`, all five healthy, with `/api/health` reporting Redis,
-  Postgres and the MediaMTX API all reachable across the compose network. It is **not on a
-  public host yet**. Two things are still unsettled and only a real deployment can settle them:
-  WebRTC ICE over UDP has only ever failed inside Docker on macOS and is unverified on Linux,
-  and `webrtcAdditionalHosts` must be a public address before anyone outside can watch — with
-  STUN configured but TURN untested, viewers behind symmetric NAT may still fail to connect.
+- ✅ **Deployment.** Running at **<https://livestream-mvp.duckdns.org>** — the whole stack on a
+  single EC2 host under Docker Compose, behind Caddy for TLS. Sign-up is deliberately closed:
+  this is a portfolio deployment with a real tipping flow, so accounts are created by invitation
+  and email confirmation is on. Stripe stays in test mode.
+- ✅ **CI/CD.** Merging to `main` builds three images in GitHub Actions, pushes them to GHCR, and
+  a systemd timer on the host swaps only the services that actually changed. Delivery is
+  pull-based so no inbound access is opened for it, and pushing to a branch deploys nothing.
 - 🔄 **Testing.** Unit tests cover the money, cache, and input-validation logic (47 tests, run in
   CI). Still missing an **end-to-end suite** — login → broadcast → watch from a second context →
   tip → chat has only ever been verified by hand, and WebRTC makes that expensive to automate.
