@@ -23,6 +23,9 @@ x-logging: &default-logging
 
 services:
   app:
+    # CI가 빌드해 GHCR에 올린다. 서버(t3.small, 2GB)에서 Next를 빌드하면
+    # 메모리가 모자라 터지거나 몇 분씩 걸린다 — 받아서 갈아끼우기만 한다.
+    image: ghcr.io/${GHCR_OWNER:-youngh82}/lsm-app:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: infra/Dockerfile.app
@@ -56,6 +59,7 @@ services:
     logging: *default-logging
 
   chat:
+    image: ghcr.io/${GHCR_OWNER:-youngh82}/lsm-chat:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: infra/Dockerfile.chat
@@ -69,7 +73,7 @@ services:
       # TLS는 리버스 프록시가 종단한다. 컨테이너 안은 평문이다
       # (인증서 경로가 없으면 chat.ts가 알아서 평문으로 뜬다)
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:3001:3001"   # Caddy만 접근한다
     depends_on:
       redis:
         condition: service_healthy
@@ -77,6 +81,7 @@ services:
     logging: *default-logging
 
   thumbnailer:
+    image: ghcr.io/${GHCR_OWNER:-youngh82}/lsm-thumbnailer:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: infra/Dockerfile.thumbnailer
@@ -108,6 +113,26 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: always
+    logging: *default-logging
+
+  caddy:
+    image: caddy:2-alpine
+    # 앱·채팅·미디어가 전부 127.0.0.1에만 포트를 게시하므로, 인터넷에서
+    # 들어오는 유일한 문이 여기다. TLS도 여기서 끝난다.
+    # mediamtx가 호스트 네트워크라 Caddy도 같은 네임스페이스에 둔다 —
+    # 그래야 127.0.0.1로 네 서비스에 전부 닿는다.
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 발급받은 인증서. 이게 날아가면 재발급하며 Let's Encrypt 한도를 깎아먹는다.
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+    depends_on:
+      - app
+      - chat
     restart: always
     logging: *default-logging
 
@@ -145,3 +170,5 @@ networks:
 
 volumes:
   redis-data:
+  caddy-data:
+  caddy-config:

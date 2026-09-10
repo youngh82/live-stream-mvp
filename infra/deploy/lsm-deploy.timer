@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for new live-stream-mvp images
+
+[Timer]
+# 머지 후 최대 2분 안에 반영된다. 더 짧게 하면 GHCR 조회만 늘어난다.
+OnBootSec=2min
+OnUnitActiveSec=2min
+Unit=lsm-deploy.service
+
+[Install]
+WantedBy=timers.target

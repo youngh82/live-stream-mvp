@@ -1,0 +1,34 @@
+# 리버스 프록시 + TLS 종단.
+#
+# Caddy가 Let's Encrypt 인증서를 자동으로 발급·갱신한다. 계획서의
+# "TLS 자동 갱신 cron"이 여기서 사라진다 — 별도 cron이 필요 없다.
+# (인증서 만료로 3개월 뒤 조용히 죽는 흔한 사고를 구조적으로 막는다)
+#
+# **경로가 아니라 서브도메인으로 나눈다.** DuckDNS가 하위 도메인을 전부
+# 같은 IP로 응답하기 때문에 가능하다. 경로 프리픽스(/whep/*)로 나누면
+# WHEP가 돌려주는 세션 Location 헤더가 프리픽스를 잃어버려 재생이 깨진다.
+#
+# ⚠️ **WebRTC 미디어는 여기를 지나지 않는다.** ICE는 8189(UDP/TCP)로
+#    미디어 서버에 직접 붙는다. Caddy는 신호 교환(WHEP)만 중계한다.
+
+{$APP_DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}
+
+ws.{$APP_DOMAIN} {
+	# Socket.IO 롱커넥션. Caddy는 WebSocket 업그레이드를 기본 지원한다.
+	reverse_proxy 127.0.0.1:3001
+}
+
+whep.{$APP_DOMAIN} {
+	# WHIP(송출) / WHEP(시청) 신호 교환.
+	# 브라우저에서 다른 오리진으로 호출하므로 CORS가 필요한데,
+	# MediaMTX가 직접 내려주므로 여기서 덧붙이지 않는다 (중복 헤더 방지).
+	reverse_proxy 127.0.0.1:8889
+}
+
+hls.{$APP_DOMAIN} {
+	# 썸네일 워커는 내부 주소로 읽는다. 이쪽은 외부 재생/디버깅용.
+	reverse_proxy 127.0.0.1:8890
+}
