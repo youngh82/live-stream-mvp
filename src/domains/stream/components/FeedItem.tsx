@@ -26,7 +26,7 @@ export function FeedItem({ stream, isActive, onRemove }: FeedItemProps) {
   const router = useRouter();
   const [ended, setEnded] = useState(false);
   const [showDonationPanel, setShowDonationPanel] = useState(false);
-  const { socket, connected } = useSocket(isActive);
+  const { socket, connected, status: chatStatus, retry: retryChat } = useSocket(isActive);
   const {
     messages,
     viewerCount,
@@ -39,6 +39,8 @@ export function FeedItem({ stream, isActive, onRemove }: FeedItemProps) {
     enabled: isActive,
     socket,
     connected,
+    status: chatStatus,
+    retry: retryChat,
   });
 
   const {
@@ -126,6 +128,8 @@ export function FeedItem({ stream, isActive, onRemove }: FeedItemProps) {
           messages={messages}
           onSend={sendMessage}
           connected={connected}
+          status={chatStatus}
+          onRetry={retryChat}
           isOwner={stream.is_me}
           streamId={stream.id}
           banned={banned}

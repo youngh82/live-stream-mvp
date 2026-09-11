@@ -5,6 +5,8 @@ import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import type { ChatTextSize } from './ChatMessage';
 import type { LiveChatMessage } from '../hooks/useChat';
+import type { SocketStatus } from '../hooks/useSocket';
+import Link from 'next/link';
 import { useTranslations } from 'next-intl';
 import { Loader2, AArrowUp, AArrowDown, Ban } from 'lucide-react';
 import {
@@ -18,6 +20,9 @@ interface ChatWindowProps {
   messages: LiveChatMessage[];
   onSend: (content: string) => void;
   connected: boolean;
+  /** 없으면 예전처럼 connected만 보고 "연결 중"을 띄운다 */
+  status?: SocketStatus;
+  onRetry?: () => void;
   /** 방송자 본인일 때만 제재 UI가 나온다 */
   isOwner?: boolean;
   streamId?: string;
@@ -54,6 +59,8 @@ export function ChatWindow({
   messages,
   onSend,
   connected,
+  status,
+  onRetry,
   isOwner = false,
   streamId,
   banned = null,
@@ -61,6 +68,7 @@ export function ChatWindow({
   onRemoveMessage,
 }: ChatWindowProps) {
   const t = useTranslations('chat');
+  const tc = useTranslations('common');
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
   const [textSize, setTextSize] = useState<ChatTextSize>('md');
@@ -118,7 +126,37 @@ export function ChatWindow({
           maskImage: 'linear-gradient(transparent 0%, black 20%)',
         }}
       >
-        {!connected && (
+        {/* 실패를 "연결 중"으로 뭉개지 않는다 — 예전엔 로그인 안 한 사람도, 토큰이
+            거절된 사람도 영원히 스피너만 봤다. 링크·버튼은 오버레이 토글을 막는다 */}
+        {!connected && status === 'signed-out' && (
+          <div className="flex items-center justify-center py-2">
+            <Link
+              href="/login"
+              onClick={(e) => e.stopPropagation()}
+              className="text-xs text-gray-300 underline underline-offset-2"
+            >
+              {t('signInToChat')}
+            </Link>
+          </div>
+        )}
+        {!connected && status === 'failed' && (
+          <div className="flex items-center justify-center gap-2 py-2">
+            <span className="text-xs text-gray-400">{t('connectFailed')}</span>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRetry();
+                }}
+                className="text-xs text-white underline underline-offset-2"
+              >
+                {tc('retry')}
+              </button>
+            )}
+          </div>
+        )}
+        {!connected && (!status || status === 'connecting') && (
           <div className="flex items-center justify-center gap-2 py-2">
             <Loader2 className="h-3 w-3 animate-spin text-gray-400" />
             <span className="text-xs text-gray-400">{t('connecting')}</span>
