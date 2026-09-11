@@ -105,6 +105,7 @@ export function useWHIP() {
     for (const track of opts.stream.getTracks()) {
       pc.addTrack(track, opts.stream);
     }
+    preferH264(pc);
 
     // 업링크가 약한 모바일 환경을 고려해 상한을 걸어둔다.
     // 실제 비트레이트는 WebRTC 혼잡 제어가 이 아래에서 조절한다.
@@ -212,6 +213,41 @@ export function useWHIP() {
   }, []);
 
   return { state, error, start, stop, retry, replaceVideoTrack };
+}
+
+/**
+ * 영상 코덱을 H.264 우선으로 협상한다. 지원하지 않는 브라우저에서는 아무것도 안 한다.
+ *
+ * **크롬의 기본값은 VP8인데, VP8은 HLS에 담기지 않는다.** MediaMTX가 HLS를
+ * 오디오만으로 만들고(`converting into HLS, 1 track (Opus)`), 썸네일 워커는 HLS에서
+ * 프레임을 뜨므로 크롬으로 방송한 사람의 썸네일이 **예전 사진에 영원히 고정됐다.**
+ * 아이폰 시청자도 H.264면 하드웨어로 디코딩한다.
+ *
+ * Constrained Baseline(42e01f)을 맨 앞에 둔다 — 아이폰이 확실히 재생하는 프로필이다.
+ * 나머지 코덱은 뒤에 남겨서, H.264 인코더가 없는 환경에서도 방송은 된다.
+ */
+function preferH264(pc: RTCPeerConnection) {
+  const caps = typeof RTCRtpReceiver !== 'undefined'
+    ? RTCRtpReceiver.getCapabilities?.('video')
+    : null;
+  if (!caps) return;
+
+  const rank = (c: RTCRtpCodec) => {
+    if (c.mimeType.toLowerCase() !== 'video/h264') return 2;
+    const fmtp = c.sdpFmtpLine ?? '';
+    return fmtp.includes('profile-level-id=42e01f') && fmtp.includes('packetization-mode=1') ? 0 : 1;
+  };
+  const ordered = [...caps.codecs].sort((a, b) => rank(a) - rank(b));
+  if (rank(ordered[0]) === 2) return; // H.264가 아예 없다
+
+  for (const tr of pc.getTransceivers()) {
+    if (tr.sender.track?.kind !== 'video') continue;
+    try {
+      tr.setCodecPreferences(ordered);
+    } catch {
+      // 구형 브라우저. 기본 협상(보통 VP8)으로 간다 — 방송 자체는 된다
+    }
+  }
 }
 
 function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
