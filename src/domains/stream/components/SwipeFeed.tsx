@@ -233,6 +233,14 @@ export function SwipeFeed({
       },
     );
 
+    // **이미 그려진 칸을 여기서 관찰에 넣는다.** ref 콜백(setItemRef)은 이펙트보다
+    // 먼저 실행되므로, 첫 렌더의 칸들은 관찰자가 없을 때 등록을 시도하고 조용히
+    // 빠졌다. 그러면 스크롤해도 활성 칸이 안 바뀌어 다음 방송이 썸네일에 멈췄다.
+    // (이후 리렌더가 있으면 우연히 등록돼서 됐다 안 됐다 했다)
+    for (const el of itemRefs.current.values()) {
+      observerRef.current.observe(el);
+    }
+
     return () => {
       observerRef.current?.disconnect();
     };
