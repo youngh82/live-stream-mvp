@@ -17,6 +17,10 @@
  * 스크롤 중이던 시청자는 항목을 건너뛰거나 두 번 보게 된다. Postgres에
  * 남아 있는 `started_at`을 그대로 쓰고, 그게 없을 때만 MediaMTX의
  * readyTime으로 대신한다.
+ *
+ * **주기적으로 돈다** (instrumentation.ts, 60초 — U-17). 미디어 서버가
+ * 재시작되면 on-unpublish가 유실되어 끝난 방송이 피드에 남는다. 주기
+ * 실행이라 on-publish/on-unpublish와 겹칠 수 있다 — 실행부의 순서 주석 참고.
  */
 
 import { redis } from '@/shared/lib/redis';
@@ -36,8 +40,10 @@ export interface DbLiveStream {
 }
 
 export interface ReconcilePlan {
-  /** `live:streams`에 새로 써야 할 항목 (score = 정렬 키) */
+  /** `live:streams`에 있어야 할 항목 (score = 정렬 키). 이미 있으면 score를 건드리지 않는다 */
   live: Array<{ id: string; score: number }>;
+  /** `live:streams`에서 빼야 할 것 — 스냅샷에 있었는데 송출 중이 아닌 것 */
+  toRemove: string[];
   /** 송출이 끝났는데 DB가 아직 live로 알고 있는 것 */
   toEnd: string[];
   /** 송출 중인데 DB가 모르고 있는 것 (웹훅 유실) */
@@ -51,11 +57,13 @@ export interface ReconcilePlan {
  * @param publishing MediaMTX가 보고한 송출 중 경로
  * @param dbLive     Postgres가 live로 알고 있는 스트림
  * @param now        재조정 시각 (fallback score)
+ * @param inRedis    `live:streams`에 들어 있던 id (스냅샷)
  */
 export function planReconciliation(
   publishing: PublishingPath[],
   dbLive: DbLiveStream[],
   now: number,
+  inRedis: string[] = [],
 ): ReconcilePlan {
   const startedById = new Map<string, number>();
   for (const row of dbLive) {
@@ -93,7 +101,11 @@ export function planReconciliation(
     .map((r) => r.id)
     .filter((id) => !publishingIds.has(id));
 
-  return { live, toEnd, toMarkLive };
+  // 스냅샷에 있던 것만 뺀다. 스냅샷 뒤에 on-publish가 넣은 방송은 여기에
+  // 없으므로 지워지지 않는다.
+  const toRemove = [...new Set(inRedis)].filter((id) => !publishingIds.has(id));
+
+  return { live, toRemove, toEnd, toMarkLive };
 }
 
 /* ── 실행부 ─────────────────────────────────────────────────
@@ -127,21 +139,30 @@ export async function reconcileLiveStreams(): Promise<ReconcileResult> {
   if (acquired !== 'OK') return { skipped: 'locked', live: 0, ended: 0, markedLive: 0 };
 
   try {
-    // 진실. 실패하면 여기서 던진다 — 빈 목록으로 덮어쓰지 않는다.
-    const publishing = await listPublishingPaths();
-
-    const { data: dbLive } = await supabaseAdmin
+    // **순서가 중요하다: DB·Redis 스냅샷 → MediaMTX.** 주기적으로 돌면
+    // on-publish와 겹친다. on-publish는 MediaMTX에서 송출을 확인한 *뒤에*
+    // DB와 Redis를 쓰므로, 스냅샷에 live로 잡힌 방송은 그 뒤의 MediaMTX
+    // 조회에도 반드시 잡힌다. 거꾸로 하면 막 시작한 방송이 "DB엔 live인데
+    // 송출 목록엔 없음"으로 보여 ended가 된다.
+    const { data: dbLive, error: dbError } = await supabaseAdmin
       .from('streams')
       .select('id, started_at')
       .eq('status', 'live');
+    // DB를 못 읽었는데 빈 목록으로 믿으면 송출 중인 방송을 전부 toMarkLive로 본다
+    if (dbError) throw new Error(`streams 조회 실패: ${dbError.message}`);
 
-    const plan = planReconciliation(publishing, dbLive ?? [], Date.now());
+    const inRedis = await redis.zrevrange(LIVE_KEY, 0, -1);
 
-    // 목록을 통째로 갈아끼운다. 지웠다 넣는 사이에 피드가 빈 목록을 읽으면
-    // 안 되므로 한 트랜잭션(MULTI)으로 묶는다.
+    // 진실. 실패하면 여기서 던진다 — 빈 목록으로 덮어쓰지 않는다.
+    const publishing = await listPublishingPaths();
+
+    const plan = planReconciliation(publishing, dbLive ?? [], Date.now(), inRedis);
+
+    // 통째로 갈아끼우지 않는다(DEL 금지) — 그 사이 on-publish가 넣은 방송이
+    // 지워진다. NX: 이미 있는 항목은 score(피드 커서)를 건드리지 않는다.
     const tx = redis.multi();
-    tx.del(LIVE_KEY);
-    for (const item of plan.live) tx.zadd(LIVE_KEY, item.score, item.id);
+    for (const item of plan.live) tx.zadd(LIVE_KEY, 'NX', String(item.score), item.id);
+    if (plan.toRemove.length) tx.zrem(LIVE_KEY, ...plan.toRemove);
     await tx.exec();
 
     if (plan.toEnd.length) {
@@ -162,9 +183,13 @@ export async function reconcileLiveStreams(): Promise<ReconcileResult> {
         .in('id', plan.toMarkLive);
     }
 
-    console.log(
-      `[Reconcile] live=${plan.live.length} ended=${plan.toEnd.length} markedLive=${plan.toMarkLive.length}`,
-    );
+    // 1분마다 돈다 — 바뀐 게 있을 때만 남긴다
+    if (plan.toEnd.length || plan.toMarkLive.length || plan.toRemove.length) {
+      console.log(
+        `[Reconcile] live=${plan.live.length} ended=${plan.toEnd.length} markedLive=${plan.toMarkLive.length} removed=${plan.toRemove.length}`,
+        plan.toEnd.length ? `ended ids: ${plan.toEnd.join(',')}` : '',
+      );
+    }
 
     return {
       live: plan.live.length,
