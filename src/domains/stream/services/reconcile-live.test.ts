@@ -120,6 +120,44 @@ describe("양방향 드리프트 보정", () => {
   });
 });
 
+describe("Redis 목록 (주기 실행 — U-17)", () => {
+  it("송출이 끝난 유령을 목록에서 뺀다", () => {
+    const plan = planReconciliation(
+      [path("a")],
+      [dbRow("a", new Date(T1).toISOString()), dbRow("ghost", new Date(T1).toISOString())],
+      NOW,
+      ["a", "ghost"],
+    );
+    expect(plan.toRemove).toEqual(["ghost"]);
+    expect(plan.toEnd).toEqual(["ghost"]);
+  });
+
+  it("DB는 이미 ended인데 Redis에만 남은 것도 뺀다", () => {
+    const plan = planReconciliation([], [], NOW, ["stale"]);
+    expect(plan.toRemove).toEqual(["stale"]);
+    expect(plan.toEnd).toEqual([]);
+  });
+
+  it("송출 중인 것은 절대 빼지 않는다", () => {
+    const plan = planReconciliation(
+      [path("a"), path("b")],
+      [dbRow("a", new Date(T1).toISOString())],
+      NOW,
+      ["a", "b"],
+    );
+    expect(plan.toRemove).toEqual([]);
+  });
+
+  it("스냅샷 뒤에 시작한 방송은 건드리지 않는다 (on-publish와 겹칠 때)", () => {
+    // 실행부는 DB·Redis 스냅샷 → MediaMTX 순서로 읽는다. 스냅샷 뒤에 시작한
+    // 방송은 스냅샷에 없으므로 ended도, 목록 제거도 되지 않고 live로만 잡힌다.
+    const plan = planReconciliation([path("new")], [], NOW, []);
+    expect(plan.toEnd).toEqual([]);
+    expect(plan.toRemove).toEqual([]);
+    expect(plan.live.map((l) => l.id)).toEqual(["new"]);
+  });
+});
+
 describe("경계", () => {
   it("아무도 방송 중이 아니면 목록을 비우고 DB의 유령을 정리한다", () => {
     const plan = planReconciliation([], [dbRow("ghost", new Date(T1).toISOString())], NOW);
@@ -130,6 +168,7 @@ describe("경계", () => {
   it("전부 비어 있으면 아무 일도 하지 않는다", () => {
     expect(planReconciliation([], [], NOW)).toEqual({
       live: [],
+      toRemove: [],
       toEnd: [],
       toMarkLive: [],
     });
