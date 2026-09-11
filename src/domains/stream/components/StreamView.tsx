@@ -72,6 +72,8 @@ export function StreamView({ id }: { id: string }) {
     messages,
     viewerCount,
     connected,
+    status: chatStatus,
+    retry: retryChat,
     sendMessage,
     banned,
     lastError,
@@ -146,6 +148,8 @@ export function StreamView({ id }: { id: string }) {
             messages={messages}
             onSend={sendMessage}
             connected={connected}
+            status={chatStatus}
+            onRetry={retryChat}
             isOwner={stream.is_me}
             streamId={stream.id}
             banned={banned}

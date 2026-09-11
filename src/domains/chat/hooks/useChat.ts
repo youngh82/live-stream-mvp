@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { useSocket } from './useSocket';
+import { useSocket, type SocketStatus } from './useSocket';
 import type { Socket } from 'socket.io-client';
 
 export type SystemEvent = 'joined' | 'left';
@@ -29,14 +29,26 @@ interface UseChatOptions {
   enabled?: boolean;
   socket?: Socket | null;
   connected?: boolean;
+  /** 외부 소켓을 넘길 때 그 소켓의 상태도 같이 넘긴다 (FeedItem) */
+  status?: SocketStatus;
+  retry?: () => void;
 }
 
 const MAX_MESSAGES = 100;
 
-export function useChat({ streamId, enabled = true, socket: externalSocket, connected: externalConnected }: UseChatOptions) {
+export function useChat({
+  streamId,
+  enabled = true,
+  socket: externalSocket,
+  connected: externalConnected,
+  status: externalStatus,
+  retry: externalRetry,
+}: UseChatOptions) {
   const internal = useSocket(enabled && !externalSocket);
   const socket = externalSocket ?? internal.socket;
   const connected = externalConnected ?? internal.connected;
+  const status = externalStatus ?? internal.status;
+  const retry = externalRetry ?? internal.retry;
   const [messages, setMessages] = useState<LiveChatMessage[]>([]);
   const [viewerCount, setViewerCount] = useState(0);
   /** 이 채널에서 채팅이 금지된 상태. null이면 정상 */
@@ -142,6 +154,8 @@ export function useChat({ streamId, enabled = true, socket: externalSocket, conn
     messages,
     viewerCount,
     connected,
+    status,
+    retry,
     sendMessage,
     banned,
     lastError,

@@ -153,10 +153,19 @@ async function getProfile(userId: string): Promise<Profile> {
 
 io.use(async (socket, next) => {
   const token = socket.handshake.auth.token;
-  if (!token) return next(new Error('인증이 필요합니다'));
+  // 거절은 로그로 남긴다. 클라이언트는 "연결 중"만 보고, 서버에 흔적이 없으면
+  // 무한 로딩의 원인을 가릴 수 없었다. warn이라 Sentry로는 올라가지 않는다.
+  const ua = socket.handshake.headers['user-agent']?.slice(0, 60) ?? '-';
+  if (!token) {
+    console.warn('[Chat] 인증 거절: 토큰 없음', ua);
+    return next(new Error('인증이 필요합니다'));
+  }
 
   const userId = await verifyToken(token);
-  if (!userId) return next(new Error('유효하지 않은 토큰입니다'));
+  if (!userId) {
+    console.warn('[Chat] 인증 거절: 유효하지 않은 토큰', ua);
+    return next(new Error('유효하지 않은 토큰입니다'));
+  }
 
   const profile = await getProfile(userId);
 
