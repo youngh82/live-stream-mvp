@@ -47,7 +47,7 @@ function connect(i) {
     s.on('chat:system', () => { systemMsgs++; });
     s.on('chat:message', (m) => {
       const match = /^lt:(\d+):/.exec(m?.content ?? '');
-      if (match) latencies.push(Date.now() - Number(match[1]));
+      if (match && s.measured) latencies.push(Date.now() - Number(match[1]));
     });
     sockets.push(s);
   });
@@ -64,13 +64,23 @@ for (let i = 0; i < N; i++) {
   connect(i);
   if ((i + 1) % JOIN_PER_SEC === 0) await new Promise((r) => setTimeout(r, 1000));
 }
+// 모든 소켓이 붙거나 실패할 때까지 기다린다 (최대 JOIN_TIMEOUT초).
+// 고정 5초만 기다렸더니 1000소켓에서 246개가 측정 도중에 붙어 메시지를 받았고,
+// 분모(측정 시작 시 연결 수)에 없던 수신이 더해져 전달률이 120%로 나왔다.
+const JOIN_TIMEOUT = Number(args['join-timeout'] ?? 120);
+while (joined + connectErrors < N && Date.now() - t0 < JOIN_TIMEOUT * 1000) {
+  await new Promise((r) => setTimeout(r, 200));
+}
+const joinSecs = (Date.now() - t0) / 1000;
 // 입장 알림 폭주가 가라앉을 때까지 기다린다. 측정 창에 섞이면 안 된다.
 await new Promise((r) => setTimeout(r, 5000));
-const joinSecs = (Date.now() - t0) / 1000;
-console.error(`joined ${joined}/${N} in ${joinSecs.toFixed(1)}s, connect errors ${connectErrors}, system msgs ${systemMsgs}`);
+const pending = N - joined - connectErrors;
+console.error(`joined ${joined}/${N} in ${joinSecs.toFixed(1)}s, connect errors ${connectErrors}, pending ${pending}, system msgs ${systemMsgs}`);
 
 latencies.length = 0;
 const live = sockets.filter((s) => s.connected);
+// 측정 시작 시점에 붙어 있던 소켓만 잰다. 늦게 붙은 소켓의 수신은 분모에 없다.
+for (const s of live) s.measured = true;
 const senders = live.slice(0, SENDERS);
 let seq = 0;
 const timer = setInterval(() => {
@@ -88,6 +98,7 @@ const expected = sent * live.length;
 console.log(JSON.stringify({
   sockets: N,
   connected: live.length,
+  join_secs: +joinSecs.toFixed(1),
   sent,
   expected_deliveries: expected,
   delivered: latencies.length,
@@ -95,7 +106,8 @@ console.log(JSON.stringify({
   p50_ms: pct(latencies, 50),
   p95_ms: pct(latencies, 95),
   p99_ms: pct(latencies, 99),
-  max_ms: Math.max(0, ...latencies),
+  // Math.max(...xs)는 표본이 십수만 개면 호출 스택을 넘긴다 (500소켓에서 실제로 죽었다)
+  max_ms: latencies.reduce((a, b) => (b > a ? b : a), 0),
   chat_errors: chatErrors,
 }));
 for (const s of sockets) s.close();

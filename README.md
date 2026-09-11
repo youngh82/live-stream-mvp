@@ -328,8 +328,41 @@ single-viewer bitrate with at most 2% packet loss. That threshold was fixed befo
   a single packet. The media server was advertising its loopback and Docker bridge addresses as
   ICE candidates; see the [engineering log](docs/ENGINEERING-LOG.md). Two more bugs were
   found the same way.
-- **What this doesn't cover:** chat and feed API load (tooling written, not run), many
-  concurrent streams, and real mobile networks. All viewers were inside AWS.
+- **What this doesn't cover:** many concurrent streams and real mobile networks. All viewers
+  were inside AWS.
+
+**Chat.** Sockets in one room from a `c7i-flex.large` in the same region, 5 senders at 1 msg/s
+each, 60 s per step. Latency is send → receive on every socket, measured on one clock.
+Target: p95 under 500 ms.
+
+| Sockets | Joined | Join time | Delivered | p50 | p95 | p99 | Chat CPU while chatting |
+|---|---|---|---|---|---|---|---|
+| 100 | 100 | 2 s | 100% | 19 ms | 32 ms | 657 ms | 2–5% |
+| 500 | 500 | 10 s | 100% | 74 ms | 131 ms | 746 ms | ~10% |
+| 1000 | 998 | 40 s | 100% | 138 ms | 238 ms | 808 ms | 15–22% |
+
+- **Joining is the bottleneck, not delivery.** Each join announces itself to the whole room, so
+  1000 joins fan out to about 510,000 system messages; the chat process sits near 100% CPU
+  while people arrive and around 20% once they're talking. Two of 1000 sockets failed to join.
+- **Mass disconnects spike too.** When 1000 sockets leave at once the chat process holds ~105%
+  CPU for about 10 s and memory climbs to ~390 MB, then recovers. It didn't restart.
+- **The first 1000-socket run reported 120% delivery.** The tool waited a fixed 5 s for joins;
+  246 sockets connected mid-measurement and their messages landed outside the denominator. The
+  tool now waits for every join to settle and only counts sockets connected when timing starts.
+
+**Feed API.** Anonymous `GET /api/feed?limit=5` with 5 live streams, `autocannon` for 30 s per step.
+
+| Connections | Requests/s | p50 | p90 | p97.5 | p99 | Errors |
+|---|---|---|---|---|---|---|
+| 10 | 38 | 245 ms | 286 ms | 448 ms | 682 ms | 0 |
+| 50 | 131 | 366 ms | 474 ms | 585 ms | 670 ms | 0 |
+| 100 | 153 | 632 ms | 781 ms | 880 ms | 970 ms | 0 |
+
+- **Throughput tops out around 150 requests/s** because the single Next.js process is CPU-bound
+  (115–136% of the 2 vCPUs from 50 connections up). More connections only add queueing.
+- **The floor is the database, not the app.** A one-row PostgREST query from the server takes
+  0.3–0.7 s; the TCP connect takes 2–6 ms, so the time is spent beyond Supabase's edge. Signed-in
+  requests add an auth call and a follows query and weren't measured.
 
 ### Known issues
 
