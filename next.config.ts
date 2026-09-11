@@ -1,4 +1,5 @@
-import { withSentryConfig } from "@sentry/nextjs";
+// 빌드 설정 전용 경로. "@sentry/nextjs"에서 가져오면 v11부터 동작하지 않는다 (빌드 로그 경고)
+import { withSentryConfig } from "@sentry/nextjs/config";
 import createNextIntlPlugin from "next-intl/plugin";
 import type { NextConfig } from "next";
 import { networkInterfaces } from "os";
