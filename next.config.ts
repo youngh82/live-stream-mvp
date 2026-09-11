@@ -1,3 +1,4 @@
+import { withSentryConfig } from "@sentry/nextjs";
 import createNextIntlPlugin from "next-intl/plugin";
 import type { NextConfig } from "next";
 import { networkInterfaces } from "os";
@@ -32,4 +33,20 @@ const nextConfig: NextConfig = {
 // 로케일은 URL이 아니라 쿠키로 정한다 — src/i18n/config.ts 주석 참고
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
-export default withNextIntl(nextConfig);
+/**
+ * 브라우저 에러의 스택트레이스를 원본 파일·줄로 보이게 소스맵을 Sentry에 올린다.
+ *
+ * 값은 전부 빌드 환경에서 온다 (GitHub Actions → Dockerfile.app). 토큰은 build arg가
+ * 아니라 secret mount로 들어온다 — 이미지 히스토리에 남기지 않기 위해서다.
+ * 토큰이 없으면(로컬 빌드) 업로드만 건너뛰고 빌드는 그대로 된다.
+ *
+ * 올린 뒤 .next 안의 .map 파일은 지운다(기본값) — 원본 코드를 공개로 서빙하지 않는다.
+ */
+export default withSentryConfig(withNextIntl(nextConfig), {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  // node_modules 청크까지 올려서 라이브러리 안에서 난 에러도 읽을 수 있게
+  widenClientFileUpload: true,
+  telemetry: false,
+});

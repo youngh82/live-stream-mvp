@@ -68,3 +68,10 @@ jobs:
             NEXT_PUBLIC_WS_URL=https://ws.${{ vars.APP_DOMAIN }}
             # 브라우저 에러 수집. 공개 값이라 vars다. 비어 있으면 수집하지 않는다
             NEXT_PUBLIC_SENTRY_DSN=${{ vars.NEXT_PUBLIC_SENTRY_DSN }}
+            # 소스맵을 올릴 Sentry 조직·프로젝트. 공개 값이다
+            SENTRY_ORG=${{ vars.SENTRY_ORG }}
+            SENTRY_PROJECT=${{ vars.SENTRY_PROJECT }}
+          # 소스맵 업로드 토큰. build-args에 넣으면 이미지 히스토리에 남는다 —
+          # secret은 Dockerfile의 RUN --mount=type=secret 한 줄에서만 보인다.
+          secrets: |
+            sentry_auth_token=${{ secrets.SENTRY_AUTH_TOKEN }}
