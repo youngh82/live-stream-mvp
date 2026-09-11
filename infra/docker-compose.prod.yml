@@ -109,7 +109,8 @@ services:
     image: redis:7-alpine
     # **AOF를 켠다.** 라이브 목록(live:streams)이 Redis에만 있어서, 껐다 켜면
     # 방송 중인 스트림이 피드에서 전부 사라진다. AOF는 그 창을 좁힐 뿐이고
-    # 진짜 복구는 MediaMTX에 되묻는 재조정 코드다 — 아직 없다 (관문 2).
+    # 진짜 복구는 MediaMTX에 되묻는 재조정이다 — 앱 기동 시 돈다
+    # (domains/stream/services/reconcile-live.ts). 주기적으로는 아직 안 돈다.
     command: redis-server --appendonly yes --appendfsync everysec
     volumes:
       - redis-data:/data

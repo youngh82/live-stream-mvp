@@ -251,9 +251,9 @@ for taste scoring, so translating them would corrupt the ranking data.
 | Database | Supabase Postgres, 11 migrations, RLS with column-level grants |
 | Payments | Stripe Checkout (top-ups), Toss payouts (withdrawals — pending approval) |
 | Storage | Supabase Storage (auto-generated thumbnails) |
-| i18n | next-intl, cookie-based locale, 315 message keys in ko/en |
+| i18n | next-intl, cookie-based locale, 317 message keys in ko/en |
 
-Roughly 13,500 lines across 126 TypeScript files, organized by domain
+Roughly 14,800 lines across 134 TypeScript files, organized by domain
 (`auth`, `stream`, `chat`, `donation`, `user`, `feed`, `moderation`, `payout`).
 
 ---
@@ -282,9 +282,19 @@ Roughly 13,500 lines across 126 TypeScript files, organized by domain
 - ✅ **CI/CD.** Merging to `main` builds three images in GitHub Actions, pushes them to GHCR, and
   a systemd timer on the host swaps only the services that actually changed. Delivery is
   pull-based so no inbound access is opened for it, and pushing to a branch deploys nothing.
-- 🔄 **Testing.** Unit tests cover the money, cache, and input-validation logic (47 tests, run in
-  CI). Still missing an **end-to-end suite** — login → broadcast → watch from a second context →
-  tip → chat has only ever been verified by hand, and WebRTC makes that expensive to automate.
+- ✅ **Operations.** An uptime monitor watches the app (which checks Redis, Postgres, and the media
+  server) and the chat server separately, since the app's health check can't see chat. Sentry
+  collects errors from the browser, the app server, chat, and the thumbnail worker. A rollback
+  script pins every service to an earlier commit's images, and the deploy timer respects the pin.
+  The database is dumped to S3 every night, and a restore script loads the latest dump into a
+  throwaway Postgres and compares every table's row count against production. Migrations run
+  through a script that records what's applied inside the database and applies each file
+  atomically.
+- ✅ **Load tested.** See [Load test](#load-test) below.
+- 🔄 **Testing.** 65 unit tests cover the money, cache, input-validation, and media-server logic,
+  and run in CI. Still missing an **end-to-end suite**: login → broadcast → watch from a second
+  context → tip → chat has only ever been verified by hand, and WebRTC makes that expensive to
+  automate.
 - 🔄 **Payouts.** Code, schema, and UI are complete and the fee math is verified, but the Toss
   sub-payment service is still pending approval, so **seller registration and a real payout round
   trip have never run**. The UI shows a "not configured" banner rather than pretending otherwise.
@@ -299,6 +309,39 @@ Roughly 13,500 lines across 126 TypeScript files, organized by domain
 </p>
 
 <p align="center"><em>The payout screen states the unfinished dependency instead of hiding it.</em></p>
+
+### Load test
+
+One `t3.small` (2 vCPU, 2 GB) running the whole stack, one 2.5 Mbps 1080×1920 stream, and
+synthetic WebRTC viewers from another EC2 instance in the same region
+([`loadtest/`](loadtest/)). A viewer counts as fine if it receives at least 90% of the
+single-viewer bitrate with at most 2% packet loss. That threshold was fixed before the first run.
+
+| Viewers | Duration | Fine | Server CPU | Egress | Network allowance exceeded |
+|---|---|---|---|---|---|
+| **150** | **20 min** | **100%** | 39% avg, 69% peak | 416 Mbps avg | 0 packets |
+
+- **The ceiling wasn't found.** Nothing above 150 was tried. CPU isn't the constraint because the
+  media server forwards packets and never re-encodes. Memory grows about 5 MB per viewer, so it's
+  the likely next limit, but that's unverified.
+- **The first result was a bug, not a number.** At 10 viewers, a quarter of them never received
+  a single packet. The media server was advertising its loopback and Docker bridge addresses as
+  ICE candidates; see the [engineering log](docs/ENGINEERING-LOG.md). Two more bugs were
+  found the same way.
+- **What this doesn't cover:** chat and feed API load (tooling written, not run), many
+  concurrent streams, and real mobile networks. All viewers were inside AWS.
+
+### Known issues
+
+- **No adaptive bitrate.** Every viewer gets the bitrate the broadcaster sends, so a weak mobile
+  connection stutters rather than dropping quality.
+- **Intermittent black screen on iPhone over LTE for RTMP (OBS) streams.** The connection is
+  established and the server keeps sending, but the phone gets no picture. That one session also
+  pulls 13–17× the stream bitrate in retransmissions. Packet size, burstiness, server load,
+  bitrate, and the ICE configuration have each been measured and ruled out, and it didn't
+  reproduce the next day. Browser- and phone-published streams haven't shown it.
+- **A media-server restart can leave ended streams in the feed** until the app restarts,
+  because the live-set reconcile only runs at app startup.
 
 ### Known gaps in the localization pass
 
