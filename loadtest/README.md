@@ -44,7 +44,13 @@ node loadtest/chat/chat-load.mjs --ws https://ws.<domain> --stream <id> \
 `tokens.txt` holds one Supabase access token per line; sockets reuse them round-robin.
 Server rate limit is 2 msg/s per user, so senders stay at 1/s.
 
-Not run yet.
+It waits until every socket has joined or failed (`--join-timeout`, default 120 s) and only
+times sockets that were connected when measurement started. The output includes `join_secs`;
+joining, not delivery, is where the server spends its CPU.
+
+The feed API was measured with [`autocannon`](https://github.com/mcollina/autocannon):
+`npx autocannon -c 50 -d 30 https://<domain>/api/feed?limit=5`. Put a few streams live first —
+an empty feed never reaches the database and looks much faster than it is.
 
 ## Results
 
