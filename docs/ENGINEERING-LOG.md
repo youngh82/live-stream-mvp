@@ -10,6 +10,7 @@ twice because the second person didn't know why the first fix looked odd.
 - [Security](#security)
 - [Feed and realtime](#feed-and-realtime)
 - [Platform and tooling](#platform-and-tooling)
+- [Operations and deployment](#operations-and-deployment)
 - [Still open](#still-open)
 
 ---
@@ -157,6 +158,61 @@ failed`. The application log showed nothing at all.
 the contract between the seed script, the database and the auth route.
 
 ---
+
+### A quarter of viewers never received a single packet
+
+**Symptom.** Found by the load test at 10 viewers: 3 of 10 WHEP sessions were
+created, then closed with `deadline exceeded while waiting connection`. The
+client saw no error. A real viewer would get a black screen. From a home
+connection it was 1 in 20; from inside the VPC, 15–27%.
+
+**Cause.** MediaMTX runs with host networking, and `webrtcIPsFromInterfaces`
+defaults to on, so it offered **every interface** as an ICE candidate:
+`127.0.0.1`, both Docker bridges, and the VPC private address. Clients spent
+their connection window on pairs that could never work.
+
+**Fix.** `webrtcIPsFromInterfaces: no`. Candidates now come only from the
+configured public hosts (the domain, so a changed IPv4 still resolves, plus the
+fixed IPv6). Verified by dumping the SDP answer: only public addresses remain.
+150 of 150 viewers connected afterwards.
+
+### A broadcaster couldn't come back, and the first fix was measured wrong
+
+**Symptom.** After a media-server restart, the same stream key got `401` on
+every reconnect: `denied: cannot verify publish state`.
+
+**Cause.** The restart lost the `on-unpublish` webhook, so the database still
+said `live`. For exactly that case, the auth hook asks MediaMTX whether the path
+is really publishing. But MediaMTX calls the auth hook *while handling that
+path*, and the path API waits for the hook to answer. The two waited on each
+other until the hook's 3-second timeout, which denies.
+
+**The first fix was wrong.** It switched from `paths/get` to `paths/list`,
+based on a measurement that called the endpoints one after another. `paths/get`
+blocked for 5 s, so by the time `paths/list` ran the auth had already finished,
+and it looked fast. Measured concurrently, `paths/list` blocked for 5.5 s too.
+Only the connection lists (`rtmpconns`, `webrtcsessions`) answered, in about
+2 ms.
+
+**Fix.** Publish state comes from connection lists: a connection with
+`state: publish` on that path. A connection waiting on auth shows as `idle` with
+no path, so it doesn't count as its own publisher. Checked on production with a
+manufactured ghost-live state, and a duplicate publisher is still refused.
+
+**Don't revert.** Never call a path API from inside the MediaMTX auth hook.
+
+### Chrome broadcasters' thumbnails stopped updating
+
+**Symptom.** One broadcaster's thumbnail stayed on a days-old image. The
+thumbnail worker logged `1/2 updated` on every tick.
+
+**Cause.** Chrome publishes VP8 by default, and HLS can't carry VP8. MediaMTX
+built an audio-only muxer (`converting into HLS, 1 track (Opus)`), and the
+worker, which grabs a frame from HLS, had nothing to grab. Phone broadcasts
+were fine because iOS Safari sends H.264.
+
+**Fix.** The WHIP publisher calls `setCodecPreferences` with H.264 Constrained
+Baseline first and keeps the other codecs as fallbacks.
 
 ## Security
 
@@ -404,6 +460,36 @@ ever built**. Sound could not reach a viewer under any circumstances.
 
 ---
 
+### Swiping didn't start the next stream
+
+**Symptom.** Scrolling from the first stream to the second left the second on
+its thumbnail. The first kept playing off-screen. Opening the same stream from
+Explore worked.
+
+**Cause.** Each item registers itself with the IntersectionObserver from a ref
+callback, and the observer is created in an effect. Ref callbacks run
+**before** effects, so on the first render every item tried to register with an
+observer that didn't exist yet, and `observer?.observe(el)` quietly did nothing.
+It only worked when some later re-render re-ran the refs, which made it
+intermittent.
+
+**Fix.** Right after creating the observer, observe every item that has
+already registered.
+
+### Chat said "Connecting…" forever
+
+**Symptom.** On an iPhone, chat never connected and the server logged nothing.
+
+**Cause.** The socket hook had no failure state. With no session it returned
+without creating a socket. A token rejected by the server's auth middleware
+isn't retried by Socket.IO, and there was no `connect_error` handler. After five
+failed reconnects it gave up. All three looked like the same spinner. Here the
+phone had simply been logged out.
+
+**Fix.** Explicit `connecting / connected / signed-out / failed` states, one
+token refresh and reconnect on rejection, and a login link or retry button in
+place of the spinner. The chat server now logs each rejection and its reason.
+
 ## Platform and tooling
 
 ### The app loaded on a phone but no button worked
@@ -487,6 +573,60 @@ the nickname from `raw_user_meta_data`. The client-side insert was removed.
 
 ---
 
+## Operations and deployment
+
+### The deploy pipeline had never deployed anything
+
+**Symptom.** A merge wasn't live ten minutes later. The server was three merges
+behind. The earlier ones were docs-only, so nobody had noticed.
+
+**Cause.** Three layers, each hiding the next:
+1. The systemd timer was installed but never enabled.
+2. Enabled, it would have failed anyway: it runs as root, the repo is owned by
+   `ubuntu`, and git refused with `dubious ownership`.
+3. Past that, the change check compared `compose images` before and after
+   `pull`, which lists the images of *running* containers. They were always
+   equal, so it never swapped anything.
+
+**Fix.** Scoped `safe.directory`, and no comparison at all: `up -d` already
+recreates only services whose image or config changed. Verified end to end: the
+next merge was picked up by the timer, which replaced only the app container.
+
+**Lesson.** "The pipeline exists" is not done. Done means watching one merge
+arrive on the server.
+
+### Config file changes never reached the running containers
+
+**Cause.** `mediamtx.yml` and the `Caddyfile` are bind-mounted. After a pull,
+compose sees an identical container definition and does nothing. Git also
+writes the changed file as a new inode, and the running container keeps the
+old one.
+
+**Fix.** The deploy script diffs the pulled commits for those files and
+force-recreates only the matching service.
+
+### With Redis down, the app hung instead of reporting it
+
+**Cause.** The startup hook awaited the live-set reconcile. Next.js serves
+nothing until that hook resolves, and ioredis queues commands until it
+reconnects. So `/api/health`, the endpoint meant to report `redis: false`,
+never answered at all.
+
+**Fix.** The reconcile runs in the background. With Redis unreachable, health
+now answers in 3 s with `503 {redis: false}`.
+
+### Smaller ones
+
+- **The uptime monitor saw the chat server as down.** The Socket.IO handshake
+  URL answers `HEAD` with 400, and monitors send `HEAD`. Chat now has its own
+  `/health`.
+- **A rollback test took production chat monitoring down for 8 minutes.** The
+  test was meant to show that a commit with no images gets refused. That
+  commit's cancelled build had in fact pushed images, so the rollback ran and
+  removed `/health`. The script now lists the commits that would leave
+  production and asks first. Test "must fail" paths against the nearest
+  harmless target.
+
 ## Still open
 
 **OBS audio is silent.** MediaMTX logs `skipping track 2 (MPEG-4 Audio)` —
@@ -494,14 +634,21 @@ WebRTC does not carry AAC, only Opus. Setting the OBS audio codec to Opus fixes
 it; not yet applied. Phone broadcasting is unaffected because browsers send Opus
 by default.
 
-**MediaMTX WebRTC does not work inside Docker on macOS.** ICE reaches connected
-and then immediately disconnects; Docker Desktop's UDP forwarding does not carry
-the media traffic. Development runs MediaMTX natively and keeps only Redis in
-Docker. Likely absent on Linux, **but that is unverified and blocks deployment.**
+**LTE black screen on iPhone for RTMP (OBS) streams, intermittently.** ICE
+connects over IPv6, but no picture appears. That one session pulls 13–17× the
+stream bitrate in retransmissions, and it works on Wi-Fi. Ruled out by
+measurement: the ICE fix above, server load, bitrate and resolution, packet size
+(max 1,216 B payload, inside the IPv6 minimum MTU), burstiness (browser-published
+streams burst *more* and play fine), and the IPv6 path itself. It didn't reproduce
+the next day. A capture of a working session is kept for comparison. Separately,
+nothing caps retransmission: one such viewer costs as much egress as ~15 normal
+ones.
 
-**Email confirmation is disabled in Supabase.** Convenient for development;
-shipping this way would allow signing up with someone else's address. Must be
-enabled before deploying.
+**Ended streams can linger in the feed after a media-server restart.** The
+restart can lose `on-unpublish`, and the reconcile that clears such ghosts runs
+only at app startup.
+
+**No adaptive bitrate.** Viewers get whatever the broadcaster sends.
 
 **Payout provider is not approved yet.** The code is complete and the fee
 arithmetic is verified, but `pnpm payout:check` returns HTTP 403
