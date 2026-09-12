@@ -281,8 +281,9 @@ jobs:
           vid=$(mkuser e2e-viewer@example.com e2e_viewer);     test -n "$vid" && test "$vid" != null
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE users SET role = 'streamer' WHERE id = '$sid'"
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE users SET point_balance = 1000 WHERE id = '$vid'"
+          # stream_key는 UUID여야 한다 — /api/stream/auth가 형식부터 본다 (접두어를 붙이면 401)
           stream_id=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA \
-            -c "INSERT INTO streams (user_id, title, stream_key) VALUES ('$sid', 'e2e stream', 'e2e-key-' || gen_random_uuid()) RETURNING id" | head -1)
+            -c "INSERT INTO streams (user_id, title, stream_key) VALUES ('$sid', 'e2e stream', gen_random_uuid()::text) RETURNING id" | head -1)
           test -n "$stream_id"
           {
             echo "E2E_STREAMER_EMAIL=e2e-streamer@example.com"
