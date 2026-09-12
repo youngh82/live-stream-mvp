@@ -21,6 +21,33 @@ AWS_IMAGE=amazon/aws-cli:2.27.50
 # 파일 전체를 source하지 않는다 — 값에 셸 특수문자가 섞여 있을 수 있다.
 env_value() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2-; }
 
+# ── 실패 알림: Sentry Crons ──────────────────────────────────────
+# 백업이 실패해도 지금까지는 아무도 몰랐다. 시작·끝을 Sentry에 체크인하면
+# 두 경우 모두 알림이 온다: 실패(status=error), 그리고 **아예 안 돈 경우**
+# (타이머가 멈춤·서버 꺼짐 — 정해진 시각에 체크인이 없으면 Sentry가 missed로 본다).
+# 모니터는 첫 체크인의 monitor_config로 자동 생성된다(upsert). 서버 DSN을 쓴다.
+#
+# **알림이 백업을 막으면 안 된다.** DSN이 없거나 Sentry가 안 받아도 백업은 계속한다.
+DSN=$(env_value SENTRY_DSN_SERVER || true)
+CRON_URL=""
+if [[ "$DSN" =~ ^https://([^@]+)@([^/]+)/([0-9]+)$ ]]; then
+  CRON_URL="https://${BASH_REMATCH[2]}/api/${BASH_REMATCH[3]}/cron/lsm-db-backup/${BASH_REMATCH[1]}/"
+fi
+
+checkin() {
+  [ -n "$CRON_URL" ] || return 0
+  curl -fsS -m 10 -X POST "$CRON_URL" -H 'Content-Type: application/json' -d "$1" > /dev/null \
+    || echo "[backup] Sentry 체크인 실패 (백업과는 무관)" >&2
+}
+
+# 스케줄은 lsm-db-backup.timer와 같다(매일 18:00 UTC). Persistent=true라 서버가 꺼져
+# 있었으면 켜진 뒤 늦게 돌 수 있어 여유를 60분 둔다. 평소 1분 안에 끝난다.
+checkin '{"status":"in_progress","monitor_config":{"schedule":{"type":"crontab","value":"0 18 * * *"},"checkin_margin":60,"max_runtime":30,"timezone":"UTC"}}'
+
+work=""
+# 어느 줄에서 실패하든(set -e) 여기로 온다. 종료 코드로 결과를 보고한다.
+trap 'rc=$?; rm -rf "${work:-}"; if [ "$rc" -eq 0 ]; then checkin "{\"status\":\"ok\"}"; else checkin "{\"status\":\"error\"}"; fi' EXIT
+
 # 비밀번호가 `docker run` 인자로 들어가면 ps에 그대로 보인다. 환경변수로만 넘긴다.
 PGURL=$(env_value DATABASE_URL)
 BUCKET=$(env_value BACKUP_S3_BUCKET)
@@ -32,7 +59,6 @@ export PGURL
 
 key="daily/lsm-$(date -u +%Y%m%dT%H%M%SZ).dump"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
 
 docker run --rm --network host -e PGURL -v "$work:/out" "$PG_IMAGE" \
   pg_dump "$PGURL" --format=custom --schema=public --schema=auth --schema=storage \
