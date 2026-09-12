@@ -1,0 +1,46 @@
+# E2E(Playwright) 전용 MediaMTX 설정 — 실제 브라우저가 WHIP으로 송출하고 WHEP으로 본다.
+#
+# mediamtx.prod.yml을 바탕으로 CI 한 대(브라우저·앱·미디어 서버가 같은 호스트)에 맞췄다:
+#   - WebRTC만 켠다. 암호화 없음(TLS는 운영에서 Caddy가 한다. 개발용 mediamtx.yml은
+#     certs/dev.crt가 필요해 CI에서 못 뜬다)
+#   - ICE 후보는 루프백으로 충분하다 — 브라우저가 같은 호스트에 있다
+#   - 송출 인증과 on-publish/on-unpublish 웹훅은 운영과 같은 경로로 앱에 간다
+#     (runOn* 훅이 curl을 쓰므로 이미지는 infra/Dockerfile.mediamtx로 빌드한다)
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+rtsp: no
+rtmp: no
+hls: no
+srt: no
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+webrtcAllowOrigins: ['*']
+webrtcLocalUDPAddress: :8189
+webrtcAdditionalHosts: [127.0.0.1]
+
+authMethod: http
+authHTTPAddress: http://127.0.0.1:3000/api/stream/auth
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+pathDefaults:
+  runOnOnline: >
+    curl -s -X POST http://127.0.0.1:3000/api/stream/on-publish
+    -H "Content-Type: application/json"
+    -d '{"path": "$MTX_PATH"}'
+    || true
+  runOnOnlineRestart: false
+  runOnOffline: >
+    curl -s -X POST http://127.0.0.1:3000/api/stream/on-unpublish
+    -H "Content-Type: application/json"
+    -d '{"path": "$MTX_PATH"}'
+    || true
+
+paths:
+  all_others:
