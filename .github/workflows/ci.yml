@@ -50,9 +50,7 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
-      # verify:payout은 아래 `verify-payout` 잡에서 돈다 (Supabase 로컬 DB).
-      # verify:security는 아직 CI에 없다 — 앱·채팅·Redis·MediaMTX가 전부 떠야 한다.
-      # 그전까지는 로컬에서 손으로 돌린다.
+      # verify:payout·verify:security는 아래 별도 잡에서 돈다 (Supabase 로컬 스택).
 
       - name: Build
         run: pnpm build
@@ -93,3 +91,114 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: pnpm verify:payout
+
+  # 보안 수정이 실제로 공격을 막는지 (감사 C-01~05, H-01~03, M-01~03).
+  # 공개 anon key로 RPC·컬럼 직접 공격, 위조 웹훅, 위조 JWT·방 주입·시청자 수 조작·
+  # 레이트리밋·후원 알림 위조, 금액 검증, Stripe 이벤트 멱등성.
+  #
+  # 앱·채팅 서버·Redis·MediaMTX·Supabase(인증 포함)가 전부 떠야 한다. 운영에는 접속하지 않는다.
+  # ⚠️ 검사 대상 데이터가 없으면 스크립트는 "건너뜀"만 찍고 통과한다 — 그래서 유저·방송을
+  #    먼저 넣고, 출력에 "건너뜀"이 있으면 실패시킨다.
+  verify-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    env:
+      # Supabase 값은 아래 "Export Supabase env" 단계가 로컬 스택에서 채운다
+      REDIS_URL: redis://localhost:6379
+      APP_URL: http://localhost:3000
+      NEXT_PUBLIC_WS_URL: http://localhost:3001
+      NEXT_PUBLIC_HLS_BASE_URL: http://localhost:8888
+      NEXT_PUBLIC_WHEP_BASE_URL: http://localhost:8889
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_ci
+      STRIPE_SECRET_KEY: sk_test_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.117.0
+
+      # 이번엔 인증(gotrue)·REST(postgrest)·게이트웨이(kong)가 필요하다 —
+      # 검사가 매직링크로 토큰을 만들고 anon key로 REST를 직접 공격한다.
+      - name: Start Supabase (migrations applied)
+        run: supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+      - name: Export Supabase env
+        shell: bash
+        run: |
+          supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            --override-name db.url=DATABASE_URL \
+            | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL)=' \
+            | sed 's/"//g' >> "$GITHUB_ENV"
+          # 값이 아니라 이름만 찍는다 (로컬 스택의 기본 키라 비밀은 아니지만 습관)
+          test "$(grep -cE '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL)=' "$GITHUB_ENV")" = 4
+          grep -oE '^[A-Z_]+=' "$GITHUB_ENV"
+
+      # 관리 API만 켠 설정 (infra/mediamtx.ci.yml 주석 참고). 호스트 네트워크라 127.0.0.1:9997로 닿는다.
+      - name: Start MediaMTX (API only)
+        run: docker run -d --name mediamtx --network host -v "$PWD/infra/mediamtx.ci.yml:/mediamtx.yml:ro" bluenviron/mediamtx:latest
+
+      # 검사가 쓸 유저 1명(이메일 있음)과 방송 1개. public.users는 002의 트리거가 만든다.
+      - name: Seed one streamer and one stream
+        shell: bash
+        run: |
+          uid=$(curl -sf -X POST "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"email":"ci-streamer@example.com","password":"ci-password-123456","email_confirm":true,"user_metadata":{"nickname":"ci_streamer"}}' \
+            | jq -r .id)
+          test -n "$uid" && test "$uid" != null
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+            -c "INSERT INTO streams (user_id, title, stream_key) VALUES ('$uid', 'ci stream', 'ci-key-' || gen_random_uuid())"
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Start app and chat server
+        shell: bash
+        run: |
+          nohup pnpm start > app.log 2>&1 &
+          nohup pnpm chat:dev > chat.log 2>&1 &
+          for i in $(seq 60); do
+            if curl -sf http://localhost:3000/api/health > /dev/null && curl -sf http://localhost:3001/health > /dev/null; then
+              echo "app and chat are up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::app or chat did not become healthy"; exit 1
+
+      - name: verify:security
+        shell: bash
+        run: |
+          pnpm exec tsx scripts/verify-security.ts | tee verify.log
+          if grep -q "건너뜀" verify.log; then
+            echo "::error::검사가 건너뛰어졌다 — 시드 데이터나 스택 상태를 확인할 것"; exit 1
+          fi
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "== app"; tail -80 app.log || true
+          echo "== chat"; tail -80 chat.log || true
+          echo "== mediamtx"; docker logs mediamtx 2>&1 | tail -30 || true
