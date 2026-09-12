@@ -115,6 +115,7 @@
   },
   "dashboard": {
     "alreadyLive": "이미 방송 중입니다",
+    "bearerToken": "Bearer Token",
     "cancel": "취소",
     "cashOut": "수익 환전하기",
     "category": "카테고리",
@@ -136,6 +137,7 @@
     "portraitTip": "<b>세로 방송 팁:</b> OBS 설정 → 영상에서 기본 해상도를 <b>1080x1920</b> (세로)으로 설정하면 세로 라이브에 최적화됩니다.",
     "rekey": "스트림 키 재발급",
     "rekeyConfirm": "스트림 키를 재발급하시겠습니까?\n기존 키로는 방송할 수 없게 됩니다.",
+    "rtmpNoAudio": "<b>RTMP로는 소리가 전달되지 않습니다:</b> OBS는 RTMP로 AAC 오디오를 보내는데, WebRTC로 시청하는 사람은 AAC를 재생할 수 없습니다. 소리까지 내보내려면 위의 WHIP 설정을 쓰세요.",
     "rtmpUrl": "서버 (RTMP URL)",
     "save": "저장",
     "streamDescription": "방송 설명",
@@ -149,7 +151,10 @@
     "tagsHint": "쉼표로 구분 · 최대 {max}개",
     "tagsPlaceholder": "예: 롤, 랭크 (한 개당 {max}자 이하)",
     "tipsReceived": "받은 후원",
-    "title": "방송 대시보드"
+    "title": "방송 대시보드",
+    "whipBody": "OBS 30 이상은 WHIP으로 송출할 수 있고, 이때는 시청자가 들을 수 있는 Opus 오디오가 나갑니다. 설정 → 방송에서 서비스를 <b>WHIP</b>으로 고른 뒤 아래 두 값을 붙여넣으세요.",
+    "whipTitle": "WHIP (OBS 30 이상) — 소리 포함",
+    "whipUrl": "서버 (WHIP URL)"
   },
   "donation": {
     "charge": "충전",

@@ -335,6 +335,44 @@ authority behind it needs a path back to the authority, not a better cache.
 
 ---
 
+### Ended streams stayed in the feed after a media-server restart
+
+**Symptom.** A stream showed as live in the feed, and tapping it gave a black
+screen. Nothing was publishing.
+
+**Cause.** During a media-server restart, `on-unpublish` asks MediaMTX whether the
+path is still publishing, gets `ECONNREFUSED`, and leaves the stream `live` in
+Postgres and Redis. The reconcile above would have cleared it, but it only ran at
+app startup.
+
+**Fix.** Run it at startup and every 60 seconds. Running on a timer means it can
+now overlap with `on-publish`, and that changes three rules:
+
+- **Read the copies first, then the authority.** Snapshot Postgres and Redis, then
+  ask MediaMTX. `on-publish` writes only after MediaMTX already reports the path,
+  so anything live in the snapshot is guaranteed to show up in the later answer.
+  In the opposite order, a stream that started between the two reads is marked
+  ended.
+- **Never rebuild the set.** `DEL` plus rewrite drops a stream that `on-publish`
+  added mid-run. Entries are added with `ZADD NX`, which also leaves existing feed
+  cursors alone, and only snapshot entries that are no longer publishing are
+  removed.
+- **A failed read is an error, not an empty answer.** A database error throws
+  instead of counting as "nobody is live".
+
+A tick is skipped while the previous one is still running — with Redis down, one
+never finishes — and only the first consecutive failure is reported to Sentry, so a
+long media-server outage doesn't spend the free quota at one event a minute.
+
+**Measured in production.** Recreating the media-server container during a test
+broadcast reproduced it: the ghost was still in the feed 17 seconds later, and the
+next tick removed it at 47 seconds.
+
+**Do not revert:** the read order, or `ZADD NX` plus targeted `ZREM` in place of
+`DEL`. Either one makes a stream that starts during a reconcile end or vanish.
+
+---
+
 ### The feed dead-ended, and swiping gave no feedback at all
 
 **Symptom.** After the last live stream, swiping did nothing — no bounce, no
@@ -629,10 +667,16 @@ now answers in 3 s with `503 {redis: false}`.
 
 ## Still open
 
-**OBS audio is silent.** MediaMTX logs `skipping track 2 (MPEG-4 Audio)` —
-WebRTC does not carry AAC, only Opus. Setting the OBS audio codec to Opus fixes
-it; not yet applied. Phone broadcasting is unaffected because browsers send Opus
-by default.
+**OBS audio over RTMP is silent.** MediaMTX logs `skipping track 2 (MPEG-4 Audio)`
+— WebRTC does not carry AAC, only Opus, and OBS sends AAC over RTMP. An earlier
+note here said switching OBS's audio codec to Opus would fix it, but nothing in the
+MediaMTX docs says its RTMP input accepts Opus, so that was never a confirmed fix.
+The documented path is WHIP: OBS's WHIP output sends Opus, and MediaMTX passes the
+bearer token OBS sends to the auth hook as `token`. `/api/stream/auth` used to read
+only `password` and would have rejected every OBS WHIP publish; it now accepts
+either, and the dashboard shows the WHIP URL and token. **Not yet verified with a
+real OBS**, so this stays open until it is. Phone broadcasting is unaffected
+because browsers send Opus.
 
 **LTE black screen on iPhone for RTMP (OBS) streams, intermittently.** ICE
 connects over IPv6, but no picture appears. That one session pulls 13–17× the
@@ -642,13 +686,13 @@ measurement: the ICE fix above, server load, bitrate and resolution, packet size
 streams burst *more* and play fine), and the IPv6 path itself. It didn't reproduce
 the next day. A capture of a working session is kept for comparison. Separately,
 nothing caps retransmission: one such viewer costs as much egress as ~15 normal
-ones.
+ones. MediaMTX exposes no setting for it (every `webrtc*` option checked), so a cap would need a proxy in
+front of it or a different media server.
 
-**Ended streams can linger in the feed after a media-server restart.** The
-restart can lose `on-unpublish`, and the reconcile that clears such ghosts runs
-only at app startup.
-
-**No adaptive bitrate.** Viewers get whatever the broadcaster sends.
+**No adaptive bitrate.** Viewers get whatever the broadcaster sends. MediaMTX has
+no simulcast or per-viewer layer selection, and transcoding on the server would
+spend the CPU headroom measured in the load test (the media server only forwards
+packets today).
 
 **Payout provider is not approved yet.** The code is complete and the fee
 arithmetic is verified, but `pnpm payout:check` returns HTTP 403

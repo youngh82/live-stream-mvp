@@ -5,8 +5,8 @@ latency video, real-time chat, and tipping with a real payout pipeline.
 
 > **Status: deployed, in progress.** Live at **<https://livestream-mvp.duckdns.org>** (sign-up is
 > invite-only — see below). Streaming, discovery, chat, tipping, follows, search and moderation
-> all work end to end. An end-to-end test suite, monitoring, and the payout provider integration
-> are **not** finished. See [Where this actually stands](#where-this-actually-stands).
+> all work end to end, and every PR runs unit, payout, security, and two-browser end-to-end tests.
+> The payout provider integration is **not** finished. See [Where this actually stands](#where-this-actually-stands).
 
 <p align="center">
   <img src="docs/images/swipe-feed.gif" width="320" alt="Swiping between live streams — each one starts playing in about a second">
@@ -245,7 +245,7 @@ for taste scoring, so translating them would corrupt the ranking data.
 | Layer | Choice |
 |---|---|
 | Frontend | Next.js 16 (App Router, Turbopack), React 19, TypeScript strict, Tailwind 4 |
-| Backend | Next.js API routes (32 routes), designed to split out later |
+| Backend | Next.js API routes (33 routes), designed to split out later |
 | Media | MediaMTX — RTMP/WHIP in, WebRTC (WHEP) out, LL-HLS retained for thumbnails |
 | Realtime | Socket.io on its own process, Redis pub/sub adapter for multi-instance |
 | Database | Supabase Postgres, 11 migrations, RLS with column-level grants |
@@ -291,10 +291,12 @@ Roughly 14,800 lines across 134 TypeScript files, organized by domain
   through a script that records what's applied inside the database and applies each file
   atomically.
 - ✅ **Load tested.** See [Load test](#load-test) below.
-- 🔄 **Testing.** 65 unit tests cover the money, cache, input-validation, and media-server logic,
-  and run in CI. Still missing an **end-to-end suite**: login → broadcast → watch from a second
-  context → tip → chat has only ever been verified by hand, and WebRTC makes that expensive to
-  automate.
+- ✅ **Testing.** Every PR runs 74 unit tests (money, cache, input validation, media-server
+  logic, publish credentials); the payout checks (46) and the security attack checks (21) against a fresh Supabase
+  with every migration applied from scratch; and a Playwright run in which two real browsers
+  broadcast, watch, chat, tip, and end a stream through the real media server. The camera is
+  Chrome's fake device and the tip skips Stripe by seeding points. **Not covered:** Safari, real
+  mobile networks, and the Stripe checkout itself.
 - 🔄 **Payouts.** Code, schema, and UI are complete and the fee math is verified, but the Toss
   sub-payment service is still pending approval, so **seller registration and a real payout round
   trip have never run**. The UI shows a "not configured" banner rather than pretending otherwise.
@@ -367,14 +369,19 @@ Target: p95 under 500 ms.
 ### Known issues
 
 - **No adaptive bitrate.** Every viewer gets the bitrate the broadcaster sends, so a weak mobile
-  connection stutters rather than dropping quality.
+  connection stutters rather than dropping quality. MediaMTX has no simulcast or per-viewer
+  quality selection, and re-encoding on the server would spend the CPU headroom the load test
+  relied on, so this needs a different media architecture rather than a setting.
 - **Intermittent black screen on iPhone over LTE for RTMP (OBS) streams.** The connection is
   established and the server keeps sending, but the phone gets no picture. That one session also
   pulls 13–17× the stream bitrate in retransmissions. Packet size, burstiness, server load,
   bitrate, and the ICE configuration have each been measured and ruled out, and it didn't
-  reproduce the next day. Browser- and phone-published streams haven't shown it.
-- **A media-server restart can leave ended streams in the feed** until the app restarts,
-  because the live-set reconcile only runs at app startup.
+  reproduce the next day. Browser- and phone-published streams haven't shown it. Nothing caps
+  those retransmissions, and MediaMTX exposes no setting for it (every `webrtc*` option checked); one such viewer costs as much egress
+  as about 15 normal ones.
+- **No sound from OBS over RTMP.** OBS sends AAC over RTMP, and WebRTC can't carry AAC, so viewers
+  get silent video. The dashboard now offers WHIP for OBS 30+, which sends Opus, and the publish
+  auth accepts the bearer token OBS uses for it. **Not yet verified with a real OBS.**
 
 ### Known gaps in the localization pass
 

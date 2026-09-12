@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/shared/lib/supabase-admin';
 import { isPublishing } from '@/shared/lib/media-server';
+import { suppliedStreamKey } from '@/domains/stream/services/publish-credentials';
 
 /**
  * MediaMTX authHTTPAddress 엔드포인트.
@@ -8,15 +9,18 @@ import { isPublishing } from '@/shared/lib/media-server';
  * MediaMTX가 publish/read 요청마다 이곳으로 POST한다.
  * 2xx = 허용, 그 외 = 거부.
  *
- * Body: { user, password, ip, action, path, protocol, id, query }
+ * Body: { user, password, token, ip, action, path, protocol, id, query, userAgent }
  *
  * 경로(path)는 streams.id이고 공개값이다.
- * 송출 권한은 password로 전달된 stream_key로만 판단한다.
+ * 송출 권한은 stream_key로만 판단한다. 키는 클라이언트에 따라 password
+ * (RTMP 쿼리, WHIP Basic) 또는 token(OBS WHIP의 Bearer)으로 온다.
  */
 
 interface MediaMTXAuthRequest {
   user?: string;
   password?: string;
+  /** `Authorization: Bearer <token>` — OBS WHIP은 이것만 보낼 수 있다 */
+  token?: string;
   ip?: string;
   action?: 'publish' | 'read' | 'playback' | 'api' | 'metrics' | 'pprof';
   path?: string;
@@ -49,9 +53,9 @@ export async function POST(request: NextRequest) {
     return deny(`invalid path: ${path}`);
   }
 
-  // 비밀번호로 전달된 값이 실제 stream_key인지 확인
-  // MediaMTX는 rtmp://host:1935/<path>?user=x&pass=y 형태의 query에서 뽑아 전달한다
-  const suppliedKey = body.password ?? '';
+  // 전달된 값이 실제 stream_key인지 확인. 어느 필드로 오는지는
+  // publish-credentials.ts 주석 참고 (RTMP·브라우저 WHIP → password, OBS WHIP → token)
+  const suppliedKey = suppliedStreamKey(body);
   if (!UUID_RE.test(suppliedKey)) {
     return deny('missing or malformed stream key');
   }

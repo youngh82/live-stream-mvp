@@ -115,6 +115,7 @@
   },
   "dashboard": {
     "alreadyLive": "You're already live",
+    "bearerToken": "Bearer Token",
     "cancel": "Cancel",
     "cashOut": "Cash out earnings",
     "category": "Category",
@@ -136,6 +137,7 @@
     "portraitTip": "<b>Vertical tip:</b> in OBS Settings → Video, set the base resolution to <b>1080x1920</b> so your stream fills the portrait player.",
     "rekey": "Regenerate stream key",
     "rekeyConfirm": "Regenerate your stream key?\nThe old key will stop working.",
+    "rtmpNoAudio": "<b>No sound over RTMP:</b> OBS sends AAC audio over RTMP, and viewers watching over WebRTC can't play it. To send sound, use the WHIP settings above.",
     "rtmpUrl": "Server (RTMP URL)",
     "save": "Save",
     "streamDescription": "Description",
@@ -149,7 +151,10 @@
     "tagsHint": "comma separated · up to {max}",
     "tagsPlaceholder": "e.g. speedrun, ranked ({max} chars each)",
     "tipsReceived": "Tips received",
-    "title": "Creator dashboard"
+    "title": "Creator dashboard",
+    "whipBody": "Newer OBS (30 or later) can publish over WHIP, which sends Opus audio that viewers can hear. In Settings → Stream, set Service to <b>WHIP</b> and paste these two values.",
+    "whipTitle": "WHIP (OBS 30+) — with sound",
+    "whipUrl": "Server (WHIP URL)"
   },
   "donation": {
     "charge": "Top up",
