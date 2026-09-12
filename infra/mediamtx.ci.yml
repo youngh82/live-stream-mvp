@@ -1,0 +1,20 @@
+# CI 전용 MediaMTX 설정 — verify:security가 관리 API만 쓴다.
+#
+# 개발용 mediamtx.yml은 WebRTC 암호화에 certs/dev.crt를 요구해서 CI에서 뜨지 않는다.
+# 검사가 필요로 하는 것은 두 가지뿐이다:
+#   - 루프백의 관리 API가 200을 준다 (검사 "정상: 루프백에서는 관리 API 동작")
+#   - 연결 목록 API가 "아무도 송출 중이 아님"을 준다 → 위조 on-publish가 403 (H-03)
+# media-server.ts는 꺼진 프로토콜의 목록 API(404)를 건너뛰므로 프로토콜을 전부 꺼도 된다.
+# 실제 송출은 하지 않는다.
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+rtsp: no
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+
+paths:
+  all_others:
