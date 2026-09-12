@@ -202,3 +202,132 @@ jobs:
           echo "== app"; tail -80 app.log || true
           echo "== chat"; tail -80 chat.log || true
           echo "== mediamtx"; docker logs mediamtx 2>&1 | tail -30 || true
+
+  # 끝에서 끝까지: 실제 브라우저 둘(방송자·시청자)로 방송 → 피드에서 시청 → 채팅 → 후원 → 종료.
+  # verify-security와 같은 스택에 더해, 미디어 서버가 **실제로 송출을 받는다**
+  # (WebRTC 켬, 송출 인증·on-publish 웹훅이 앱으로). 카메라는 크롬의 가짜 장치다.
+  # 운영에는 접속하지 않는다. 결제(Stripe)는 거치지 않고 시청자 포인트를 DB에 넣는다.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    env:
+      REDIS_URL: redis://localhost:6379
+      APP_URL: http://localhost:3000
+      NEXT_PUBLIC_WS_URL: http://localhost:3001
+      NEXT_PUBLIC_HLS_BASE_URL: http://localhost:8888
+      # 빌드 시점에 번들에 박힌다 — 브라우저가 이 주소로 WHIP/WHEP을 연다
+      NEXT_PUBLIC_WHEP_BASE_URL: http://localhost:8889
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: pk_test_ci
+      STRIPE_SECRET_KEY: sk_test_ci
+      STRIPE_WEBHOOK_SECRET: whsec_ci
+      E2E_BASE_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.117.0
+
+      - name: Start Supabase (migrations applied)
+        run: supabase start -x realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor
+
+      - name: Export Supabase env
+        shell: bash
+        run: |
+          supabase status -o env \
+            --override-name api.url=NEXT_PUBLIC_SUPABASE_URL \
+            --override-name auth.anon_key=NEXT_PUBLIC_SUPABASE_ANON_KEY \
+            --override-name auth.service_role_key=SUPABASE_SERVICE_ROLE_KEY \
+            --override-name db.url=DATABASE_URL \
+            | grep -E '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL)=' \
+            | sed 's/"//g' >> "$GITHUB_ENV"
+          test "$(grep -cE '^(NEXT_PUBLIC_SUPABASE_URL|NEXT_PUBLIC_SUPABASE_ANON_KEY|SUPABASE_SERVICE_ROLE_KEY|DATABASE_URL)=' "$GITHUB_ENV")" = 4
+
+      # runOn* 훅이 curl을 쓰므로 운영과 같은 Dockerfile(curl 포함)로 빌드한다
+      - name: Start MediaMTX (WebRTC + hooks to the app)
+        run: |
+          docker build -q -f infra/Dockerfile.mediamtx -t lsm-mediamtx infra
+          docker run -d --name mediamtx --network host -v "$PWD/infra/mediamtx.e2e.yml:/mediamtx.yml:ro" lsm-mediamtx
+
+      # 방송자(streams 행 + streamer 역할)와 시청자(포인트 1,000). 비밀번호는 로컬 스택 전용 값이다.
+      - name: Seed streamer and viewer
+        shell: bash
+        run: |
+          mkuser() {
+            curl -sf -X POST "$NEXT_PUBLIC_SUPABASE_URL/auth/v1/admin/users" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"email\":\"$1\",\"password\":\"e2e-password-123456\",\"email_confirm\":true,\"user_metadata\":{\"nickname\":\"$2\"}}" \
+              | jq -r .id
+          }
+          sid=$(mkuser e2e-streamer@example.com e2e_streamer); test -n "$sid" && test "$sid" != null
+          vid=$(mkuser e2e-viewer@example.com e2e_viewer);     test -n "$vid" && test "$vid" != null
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE users SET role = 'streamer' WHERE id = '$sid'"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "UPDATE users SET point_balance = 1000 WHERE id = '$vid'"
+          # stream_key는 UUID여야 한다 — /api/stream/auth가 형식부터 본다 (접두어를 붙이면 401)
+          stream_id=$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -tA \
+            -c "INSERT INTO streams (user_id, title, stream_key) VALUES ('$sid', 'e2e stream', gen_random_uuid()::text) RETURNING id" | head -1)
+          test -n "$stream_id"
+          {
+            echo "E2E_STREAMER_EMAIL=e2e-streamer@example.com"
+            echo "E2E_VIEWER_EMAIL=e2e-viewer@example.com"
+            echo "E2E_STREAMER_PASSWORD=e2e-password-123456"
+            echo "E2E_VIEWER_PASSWORD=e2e-password-123456"
+            echo "E2E_STREAM_ID=$stream_id"
+          } >> "$GITHUB_ENV"
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Start app and chat server
+        shell: bash
+        run: |
+          nohup pnpm start > app.log 2>&1 &
+          nohup pnpm chat:dev > chat.log 2>&1 &
+          for i in $(seq 60); do
+            if curl -sf http://localhost:3000/api/health > /dev/null && curl -sf http://localhost:3001/health > /dev/null; then
+              echo "app and chat are up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::app or chat did not become healthy"; exit 1
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        run: pnpm exec playwright test
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "== app"; tail -120 app.log || true
+          echo "== chat"; tail -80 chat.log || true
+          echo "== mediamtx"; docker logs mediamtx 2>&1 | tail -60 || true

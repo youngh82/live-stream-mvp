@@ -12,6 +12,10 @@
 
 # testing
 /coverage
+# Playwright E2E 결과물
+/playwright-report/
+/test-results/
+/blob-report/
 
 # next.js
 /.next/
