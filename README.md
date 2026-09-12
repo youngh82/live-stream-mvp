@@ -251,9 +251,9 @@ for taste scoring, so translating them would corrupt the ranking data.
 | Database | Supabase Postgres, 11 migrations, RLS with column-level grants |
 | Payments | Stripe Checkout (top-ups), Toss payouts (withdrawals — pending approval) |
 | Storage | Supabase Storage (auto-generated thumbnails) |
-| i18n | next-intl, cookie-based locale, 317 message keys in ko/en |
+| i18n | next-intl, cookie-based locale, 322 message keys in ko/en |
 
-Roughly 14,800 lines across 134 TypeScript files, organized by domain
+Roughly 14,900 lines across 135 TypeScript files, organized by domain
 (`auth`, `stream`, `chat`, `donation`, `user`, `feed`, `moderation`, `payout`).
 
 ---
@@ -428,7 +428,7 @@ webhook, and land in the same Redis live set the feed reads. Nothing is stubbed.
 ### Verification
 
 ```bash
-pnpm test              # 47 unit tests (Vitest) — fee math, ban cache, signal validation
+pnpm test              # 74 unit tests (Vitest) — fee math, ban cache, signal validation, reconcile, publish auth
 pnpm verify:security   # 21 checks — RLS, column grants, key exposure, media config
 pnpm verify:payout     # 46 checks — fee invariants, JWE round trip, DB payout functions
 ```
