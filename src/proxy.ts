@@ -3,7 +3,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 const protectedRoutes = ['/dashboard', '/broadcast'];
 
-export async function middleware(request: NextRequest) {
+// Next 16: 파일 규칙이 middleware → proxy로 바뀌었다 (이전 이름은 빌드 경고). 동작은 같다.
+export async function proxy(request: NextRequest) {
   const supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
