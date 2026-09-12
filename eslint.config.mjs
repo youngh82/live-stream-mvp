@@ -42,6 +42,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Claude Code가 만든 로컬 작업 사본(git worktree). 저장소 전체 복사본이라
+    // 그대로 두면 `pnpm lint` 한 번에 에러가 수천 개 쌓인다. CI에는 없는 폴더다.
+    ".claude/**",
   ]),
 ]);
 

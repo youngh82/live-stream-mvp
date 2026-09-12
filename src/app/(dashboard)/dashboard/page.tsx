@@ -10,6 +10,9 @@ import { DonationHistory } from '@/domains/donation/components/DonationHistory';
 import { ModerationPanel } from '@/domains/moderation/components/ModerationPanel';
 import { CATEGORIES, MAX_TAGS, MAX_TAG_LENGTH } from '@/domains/stream/categories';
 import { useCategoryLabel } from '@/domains/stream/hooks/useCategoryLabel';
+import { rtmpServerUrl, whipUrlFor } from '@/shared/lib/media-url';
+
+type CopyTarget = 'key' | 'url' | 'whip' | 'token';
 
 interface StreamData {
   id: string;
@@ -30,7 +33,7 @@ export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
   const [stream, setStream] = useState<StreamData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState<'key' | 'url' | null>(null);
+  const [copied, setCopied] = useState<CopyTarget | null>(null);
   const [rekeying, setRekeying] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState('');
@@ -39,7 +42,10 @@ export default function DashboardPage() {
   // 태그는 자유 입력이라 화면에서는 문자열 하나로 다루고 저장할 때만 쪼갠다
   const [tagInput, setTagInput] = useState('');
 
-  const rtmpUrl = 'rtmp://localhost:1935';
+  // 배포 이미지에는 build-images.yml이 공개 도메인을 넣는다. 예전에는 localhost로
+  // 박혀 있어서 운영 대시보드가 OBS 방송자에게 localhost를 안내했다.
+  const rtmpUrl = rtmpServerUrl();
+  const obsWhipUrl = stream?.id ? whipUrlFor(stream.id) : '';
 
   // MediaMTX 경로 이름은 공개값인 stream id이고, 송출 권한은
   // pass= 로 전달되는 stream_key를 서버가 검증해서 판단한다 (C-04).
@@ -92,7 +98,7 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [stream?.id, stream?.status]);
 
-  async function handleCopy(text: string, type: 'key' | 'url') {
+  async function handleCopy(text: string, type: CopyTarget) {
     await navigator.clipboard.writeText(text);
     setCopied(type);
     setTimeout(() => setCopied(null), 2000);
@@ -367,6 +373,47 @@ export default function DashboardPage() {
             </p>
           </div>
 
+          {/* WHIP (OBS 30+) — RTMP와 달리 소리가 시청자에게 전달된다.
+              OBS는 RTMP로 AAC를 보내는데 WebRTC 시청자는 AAC를 못 튼다 (ISSUES U-1).
+              OBS의 WHIP 설정에는 Bearer Token 칸 하나뿐이라, 스트림 키를 그대로 넣는다.
+              MediaMTX가 이를 인증 요청의 token으로 넘기고 /api/stream/auth가 받는다. */}
+          <div className="mb-4 rounded-lg border border-blue-500/30 bg-blue-500/5 p-4">
+            <p className="text-sm font-semibold text-blue-300">{t('whipTitle')}</p>
+            <p className="mt-1 text-xs text-gray-400">
+              {t.rich('whipBody', {
+                b: (chunks) => <strong className="text-gray-200">{chunks}</strong>,
+              })}
+            </p>
+            <div className="mt-3">
+              <label className="mb-1.5 block text-xs text-gray-400">{t('whipUrl')}</label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 truncate rounded-lg bg-gray-800 px-4 py-2.5 text-sm text-green-400">
+                  {obsWhipUrl || '...'}
+                </code>
+                <button
+                  onClick={() => obsWhipUrl && handleCopy(obsWhipUrl, 'whip')}
+                  className="rounded-lg bg-gray-800 p-2.5 text-gray-400 transition-colors hover:text-white"
+                >
+                  {copied === 'whip' ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="mt-3">
+              <label className="mb-1.5 block text-xs text-gray-400">{t('bearerToken')}</label>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 truncate rounded-lg bg-gray-800 px-4 py-2.5 text-sm text-yellow-400">
+                  {stream?.stream_key || '...'}
+                </code>
+                <button
+                  onClick={() => stream?.stream_key && handleCopy(stream?.stream_key, 'token')}
+                  className="rounded-lg bg-gray-800 p-2.5 text-gray-400 transition-colors hover:text-white"
+                >
+                  {copied === 'token' ? <Check className="h-4 w-4 text-green-400" /> : <Copy className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* Rekey Button */}
           <button
             onClick={handleRekey}
@@ -405,6 +452,12 @@ export default function DashboardPage() {
 
           <div className="mt-4 rounded-lg bg-yellow-500/10 p-3 text-sm text-yellow-300">
             {t.rich('portraitTip', {
+              b: (chunks) => <strong>{chunks}</strong>,
+            })}
+          </div>
+
+          <div className="mt-3 rounded-lg bg-orange-500/10 p-3 text-sm text-orange-300">
+            {t.rich('rtmpNoAudio', {
               b: (chunks) => <strong>{chunks}</strong>,
             })}
           </div>
